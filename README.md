@@ -8,8 +8,8 @@
 
 ## ดาวน์โหลดตัวติดตั้ง
 
-เปิด [GitHub Actions](https://github.com/cushyam555/cushyam555/actions/workflows/windows.yml)
-เลือกรอบ build ที่สำเร็จ แล้วดาวน์โหลด artifact **BT-Karaoke-Windows-x64**
+เปิด [GitHub Actions](https://github.com/cushyam555/cushyam555/actions/runs/41012738993)
+ดาวน์โหลด artifact **BT-Karaoke-Windows-x64**
 แตก ZIP และเปิด `BTKaraoke-2.4.1-x64-setup.exe` ต้องลงชื่อเข้าใช้ GitHub เพื่อดาวน์โหลด artifact
 หาก build ยังไม่สำเร็จ จะยังไม่มีตัวติดตั้งให้ดาวน์โหลด
 
