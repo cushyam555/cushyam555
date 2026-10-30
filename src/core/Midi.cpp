@@ -7,6 +7,21 @@
 #include <tuple>
 namespace bt {
 namespace {
+QString existingPath(QString path) {
+    if (QFileInfo::exists(path))
+        return path;
+    auto info = QFileInfo(path);
+    auto parent = info.dir().absolutePath();
+    if (parent == path)
+        return {};
+    auto dir = existingPath(parent);
+    if (dir.isEmpty())
+        return {};
+    for (const auto &name : QDir(dir).entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot))
+        if (name.compare(info.fileName(), Qt::CaseInsensitive) == 0)
+            return QDir(dir).filePath(name);
+    return {};
+}
 struct Reader {
     QByteArray b;
     int p = 0;
@@ -61,7 +76,29 @@ struct Raw {
     QString lyric;
 };
 } // namespace
-Song readSong(const QString &path) {
+Song readSong(const QString &input) {
+    QString path = input;
+    auto info = QFileInfo(path);
+    auto ext = info.suffix().toLower();
+    if (ext == "lyr" || ext == "cur") {
+        auto normalized = QDir::fromNativeSeparators(info.absoluteFilePath());
+        QString folder = ext == "lyr" ? "/Lyrics/" : "/Cursor/";
+        int pos = normalized.lastIndexOf(folder, -1, Qt::CaseInsensitive);
+        QString base = pos >= 0
+                           ? normalized.left(pos) + "/Song/" + normalized.mid(pos + folder.size())
+                           : normalized;
+        base.chop(info.suffix().size() + 1);
+        path.clear();
+        for (const auto &suffix : {".mid", ".midi", ".kar"}) {
+            auto candidate = existingPath(base + suffix);
+            if (!candidate.isEmpty()) {
+                path = candidate;
+                break;
+            }
+        }
+        if (path.isEmpty())
+            throw std::runtime_error("NCN needs its matching MIDI in the Song folder");
+    }
     QFile f(path);
     if (!f.open(QFile::ReadOnly))
         throw std::runtime_error("Cannot read song");
@@ -155,20 +192,15 @@ Song readSong(const QString &path) {
     }
     song.duration += 1;
     // NCN companion files: lyrics use four header lines, CUR stores 1/24-quarter positions.
-    QFileInfo info(path);
-    QString normalized = QDir::fromNativeSeparators(info.absoluteFilePath());
+    QFileInfo songInfo(path);
+    QString normalized = QDir::fromNativeSeparators(songInfo.absoluteFilePath());
     int songFolder = normalized.lastIndexOf("/Song/", -1, Qt::CaseInsensitive);
     if (songFolder >= 0) {
         QString root = normalized.left(songFolder);
         QString relative = normalized.mid(songFolder + 6);
-        QString base = relative.left(relative.size() - info.suffix().size() - 1);
-        QString lyrPath, curPath;
-        for (const QString &ext : {QString(".lyr"), QString(".LYR"), QString(".Lyr")})
-            if (QFile::exists(root + "/Lyrics/" + base + ext))
-                lyrPath = root + "/Lyrics/" + base + ext;
-        for (const QString &ext : {QString(".cur"), QString(".CUR"), QString(".Cur")})
-            if (QFile::exists(root + "/Cursor/" + base + ext))
-                curPath = root + "/Cursor/" + base + ext;
+        QString base = relative.left(relative.size() - songInfo.suffix().size() - 1);
+        QString lyrPath = existingPath(root + "/Lyrics/" + base + ".lyr");
+        QString curPath = existingPath(root + "/Cursor/" + base + ".cur");
         QFile l(lyrPath), c(curPath);
         if (l.open(QFile::ReadOnly) && c.open(QFile::ReadOnly)) {
             auto lines = decode(l.readAll()).replace("\r\n", "\n").replace('\r', '\n').split('\n');
@@ -204,32 +236,84 @@ Song readSong(const QString &path) {
     }
     return song;
 }
+int drumNote(int part) {
+    static const int first[] = {36, 38, 42, 46, 45, 49, 39, 60};
+    if (part < 15 || part >= PartCount)
+        return 60;
+    if (part < 23)
+        return first[part - 15];
+    int index = 23;
+    for (int note = 35; note <= 81; ++note) {
+        if (std::find(std::begin(first), std::end(first), note) != std::end(first))
+            continue;
+        if (index++ == part)
+            return note;
+    }
+    return 60;
+}
 int partFor(int channel, int note) {
     if (channel != 9)
         return channel < 9 ? channel : channel - 1;
-    if (note == 35 || note == 36)
-        return 15;
-    if (note == 38 || note == 40)
-        return 16;
-    if (note == 42 || note == 44)
-        return 17;
-    if (note == 46)
-        return 18;
-    if (note == 41 || note == 43 || note == 45 || note == 47 || note == 48 || note == 50)
-        return 19;
-    if (note == 49 || note == 51 || note == 52 || note == 55 || note == 57 || note == 59)
-        return 20;
-    if (note == 39 || note == 37)
-        return 21;
+    for (int p = 15; p < PartCount; ++p)
+        if (drumNote(p) == note)
+            return p;
     return 22;
 }
 QString partName(int p) {
-    static const char *drums[] = {"Kick", "Snare",   "Hi-hat • Closed", "Hi-hat • Open",
-                                  "Toms", "Cymbals", "Clap / Rim",      "Percussion"};
-    if (p == 23)
+    if (p == MasterPart)
         return "MASTER";
-    if (p >= 15)
-        return QString::fromUtf8(drums[p - 15]);
+    if (p >= BusFirst && p < TrackCount)
+        return QString("Bus %1").arg(QChar('A' + p - BusFirst));
+    if (p >= 15) {
+        static const char *names[] = {"Acoustic bass drum",
+                                      "Kick",
+                                      "Side stick",
+                                      "Snare",
+                                      "Hand clap",
+                                      "Electric snare",
+                                      "Low floor tom",
+                                      "Closed hi-hat",
+                                      "High floor tom",
+                                      "Pedal hi-hat",
+                                      "Low tom",
+                                      "Open hi-hat",
+                                      "Low-mid tom",
+                                      "High-mid tom",
+                                      "Crash 1",
+                                      "High tom",
+                                      "Ride 1",
+                                      "Chinese cymbal",
+                                      "Ride bell",
+                                      "Tambourine",
+                                      "Splash",
+                                      "Cowbell",
+                                      "Crash 2",
+                                      "Vibraslap",
+                                      "Ride 2",
+                                      "High bongo",
+                                      "Low bongo",
+                                      "Mute high conga",
+                                      "Open high conga",
+                                      "Low conga",
+                                      "High timbale",
+                                      "Low timbale",
+                                      "High agogo",
+                                      "Low agogo",
+                                      "Cabasa",
+                                      "Maracas",
+                                      "Short whistle",
+                                      "Long whistle",
+                                      "Short guiro",
+                                      "Long guiro",
+                                      "Claves",
+                                      "High woodblock",
+                                      "Low woodblock",
+                                      "Mute cuica",
+                                      "Open cuica",
+                                      "Mute triangle",
+                                      "Open triangle"};
+        return QString("%1 • %2").arg(names[drumNote(p) - 35]).arg(drumNote(p));
+    }
     return QString("Instrument %1 • MIDI %2").arg(p + 1).arg(p < 9 ? p + 1 : p + 2);
 }
 } // namespace bt

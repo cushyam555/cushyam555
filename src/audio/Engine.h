@@ -1,5 +1,6 @@
 #pragma once
 #include "Effect.h"
+#include "MidiOutput.h"
 #include <QJsonObject>
 #include <array>
 #include <atomic>
@@ -16,6 +17,8 @@ class Engine : public std::enable_shared_from_this<Engine> {
         QString name;
         double volume = 0.8, pan = 0;
         bool mute = false, solo = false;
+        int output = MasterPart;
+        double fxSend = 0;
         std::vector<std::shared_ptr<Effect>> fx;
     };
     mutable std::mutex mutex;
@@ -25,6 +28,17 @@ class Engine : public std::enable_shared_from_this<Engine> {
     std::atomic<bool> playing{false};
     std::atomic<int> droppedBlocks{0};
     Song song;
+    enum class OutputMode { Internal, Midi, Both };
+    void setOutputMode(OutputMode mode);
+    bool openMidiOutput(int port, QString &error);
+    void closeMidiOutput();
+    void setMelody(bool muted, int channel);
+    void panic();
+    bool melodyMuted() const;
+    int melodyChannel() const;
+    void setMute(int part, bool mute);
+    void setSolo(int part, bool solo);
+    bool setRoute(int part, int output);
     Engine();
     ~Engine();
     enum class AudioState { Offline, Starting, Ready, Failed };

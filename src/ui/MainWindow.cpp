@@ -44,7 +44,7 @@ void error(QWidget *w, const std::exception &e) {
 }
 } // namespace
 MainWindow::MainWindow(bool offline) {
-    setWindowTitle("BT Karaoke • Studio 0.1");
+    setWindowTitle("BT Karaoke • Studio 0.2");
     resize(1440, 900);
     setMinimumSize(1050, 720);
     setStyleSheet(theme());
@@ -104,6 +104,23 @@ MainWindow::MainWindow(bool offline) {
     }
     nav->addStretch();
     button("Stage / second display", nav, [this] { showStage(); }, this);
+    auto *midiControls = new QHBoxLayout;
+    outer->addLayout(midiControls);
+    button("MIDI / loopMIDI", midiControls, [this] { midiSettings(); }, this);
+    button("Panic", midiControls, [this] { engine.panic(); }, this);
+    melodyMute = new QCheckBox("ปิดเมโลดี้");
+    midiControls->addWidget(melodyMute);
+    melodyChannelControl = new QSpinBox;
+    melodyChannelControl->setRange(1, 16);
+    melodyChannelControl->setValue(4);
+    melodyChannelControl->setPrefix("Ch ");
+    melodyChannelControl->setToolTip("เลือก MIDI channel เมโลดี้ (ค่าเริ่มต้น 4)");
+    midiControls->addWidget(melodyChannelControl);
+    connect(melodyMute, &QCheckBox::toggled, this,
+            [this](bool off) { engine.setMelody(off, melodyChannelControl->value() - 1); });
+    connect(melodyChannelControl, qOverload<int>(&QSpinBox::valueChanged), this,
+            [this](int ch) { engine.setMelody(melodyMute->isChecked(), ch - 1); });
+    midiControls->addStretch();
     outer->addWidget(pages, 1);
     auto *libraryPage = new QWidget;
     pages->addWidget(libraryPage);
@@ -130,6 +147,7 @@ MainWindow::MainWindow(bool offline) {
     button(
         "＋ Import MIDI / KAR / NCN", libButtons, [this] { importSongs(); }, this)
         ->setObjectName("primary");
+    button("NCN folder…", libButtons, [this] { importFolder(); }, this);
     button(
         "Add to queue", libButtons,
         [this] {
@@ -264,14 +282,14 @@ MainWindow::MainWindow(bool offline) {
     controls->addStretch();
     status = new QLabel("Add a SoundFont • import songs • build your FX chains");
     status->setObjectName("muted");
-    controls->addWidget(status);
+    tl->addWidget(status);
     rebuildChain();
     auto *timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, [this] { refresh(); });
     timer->start(40);
     status->setWordWrap(true);
     status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    status->setMinimumWidth(100);
+    status->setMaximumHeight(40);
     if (!offline)
         QTimer::singleShot(0, this, [this] { enableAudio(); });
     else
@@ -340,19 +358,107 @@ bool MainWindow::smokeReady() const {
     return chain && meters[15] && centralWidget() && engine.strips[MasterPart].fx.size() == 1;
 }
 void MainWindow::importSongs() {
-    auto paths =
-        QFileDialog::getOpenFileNames(this, "Import MIDI / KAR (NCN: select files inside Song)", {},
-                                      "MIDI / Karaoke (*.mid *.midi *.kar);;All files (*)");
+    importPaths(QFileDialog::getOpenFileNames(
+        this, "Import MIDI / KAR / NCN", {},
+        "MIDI / NCN (*.mid *.midi *.kar *.lyr *.cur);;All files (*)"));
+}
+void MainWindow::importFolder() {
+    auto folder = QFileDialog::getExistingDirectory(this, "Select NCN root or Song folder");
+    if (folder.isEmpty())
+        return;
+    QStringList paths;
+    QDirIterator it(folder, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        auto path = it.next();
+        auto ext = QFileInfo(path).suffix().toLower();
+        if (ext == "mid" || ext == "midi" || ext == "kar")
+            paths << path;
+    }
+    importPaths(paths);
+}
+void MainWindow::importPaths(const QStringList &paths) {
     QStringList errors;
-    for (auto &p : paths)
+    QSet<QString> known;
+    for (const auto &song : library)
+        known.insert(QFileInfo(song.path).canonicalFilePath());
+    QProgressDialog progress("Importing songs…", "Cancel", 0, paths.size(), this);
+    progress.setWindowModality(Qt::WindowModal);
+    int added = 0, skipped = 0, failed = 0;
+    for (int i = 0; i < paths.size(); ++i) {
+        progress.setValue(i);
+        if (progress.wasCanceled())
+            break;
         try {
-            library.push_back(readSong(p));
+            auto song = readSong(paths[i]);
+            auto canonical = QFileInfo(song.path).canonicalFilePath();
+            if (known.contains(canonical)) {
+                ++skipped;
+                continue;
+            }
+            known.insert(canonical);
+            library.push_back(std::move(song));
+            ++added;
         } catch (const std::exception &e) {
-            errors << QFileInfo(p).fileName() + ": " + e.what();
+            ++failed;
+            if (errors.size() < 30)
+                errors << QFileInfo(paths[i]).fileName() + ": " + e.what();
         }
+    }
+    progress.setValue(paths.size());
     refreshLibrary();
+    status->setText(
+        QString("Imported %1 • duplicates %2 • failed %3").arg(added).arg(skipped).arg(failed));
     if (!errors.isEmpty())
-        QMessageBox::warning(this, "Import report", errors.join('\n'));
+        QMessageBox::warning(this, "Import report (first 30 errors)", errors.join('\n'));
+}
+void MainWindow::midiSettings() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("MIDI / loopMIDI output");
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *info = new QLabel("สร้างพอร์ตใน loopMIDI ก่อน แล้วเลือกพอร์ตด้านล่าง\n"
+                            "MIDI ส่งโน้ตไปยังโปรแกรมเสียงภายนอก ไม่ส่งเสียงหรือ FX\n"
+                            "ต้องมีอุปกรณ์เสียงพร้อมทำงานเพื่อเดินเวลาเล่นเพลง");
+    info->setWordWrap(true);
+    layout->addWidget(info);
+    auto *ports = new QComboBox;
+    ports->addItems(MidiOutput::ports());
+    layout->addWidget(ports);
+    auto *mode = new QComboBox;
+    mode->addItems({"External MIDI only", "Internal audio + external MIDI"});
+    layout->addWidget(mode);
+    button(
+        "Refresh ports", layout,
+        [ports] {
+            ports->clear();
+            ports->addItems(MidiOutput::ports());
+        },
+        &dialog);
+    button(
+        "Connect", layout,
+        [this, ports, mode, &dialog] {
+            if (ports->currentIndex() < 0)
+                return;
+            QString message;
+            if (!engine.openMidiOutput(ports->currentIndex(), message)) {
+                QMessageBox::warning(&dialog, "MIDI output", message);
+                return;
+            }
+            engine.setOutputMode(mode->currentIndex() == 0 ? Engine::OutputMode::Midi
+                                                           : Engine::OutputMode::Both);
+            engine.seek(engine.position.load());
+            status->setText("MIDI → " + ports->currentText());
+            dialog.accept();
+        },
+        &dialog);
+    button(
+        "Disconnect / use internal audio", layout,
+        [this, &dialog] {
+            engine.closeMidiOutput();
+            status->setText("Internal audio");
+            dialog.accept();
+        },
+        &dialog);
+    dialog.exec();
 }
 void MainWindow::refreshLibrary(const QString &filter) {
     songs->clear();
@@ -392,11 +498,15 @@ void MainWindow::mixerPage(QWidget *w) {
     t->setObjectName("heading");
     head->addWidget(t);
     auto *filter = new QComboBox;
-    filter->addItems({"All channels", "Drums only", "Instruments only"});
+    filter->addItems({"All channels", "Drums only", "Instruments only", "Buses only"});
+    filter->setMaximumWidth(190);
+    head->addStretch();
     head->addWidget(filter);
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
-    left->addWidget(scroll, 1);
+    auto *mixArea = new QHBoxLayout;
+    mixArea->addWidget(scroll, 1);
+    left->addLayout(mixArea, 1);
     auto *strips = new QWidget;
     strips->setObjectName("mixerSurface");
     auto *row = new QHBoxLayout(strips);
@@ -404,13 +514,35 @@ void MainWindow::mixerPage(QWidget *w) {
     for (int p = 0; p < TrackCount; ++p) {
         auto *strip = new QWidget;
         strip->setObjectName("panel");
-        strip->setFixedWidth(142);
+        strip->setFixedWidth(158);
         widgets[p] = strip;
-        row->addWidget(strip);
+        if (p == MasterPart)
+            mixArea->addWidget(strip);
+        else
+            row->addWidget(strip);
         auto *v = new QVBoxLayout(strip);
+        v->setContentsMargins(8, 8, 8, 8);
+        v->setSpacing(5);
         auto *select = new QPushButton(
             p < 15 ? QString("Instrument %1\nMIDI %2").arg(p + 1).arg(p < 9 ? p + 1 : p + 2)
                    : QString(partName(p)).replace(" • ", "\n"));
+        select->setContextMenuPolicy(Qt::CustomContextMenu);
+        select->setToolTip("Right-click to rename this channel / bus");
+        connect(select, &QWidget::customContextMenuRequested, this, [this, p] {
+            QString old;
+            {
+                std::lock_guard<std::mutex> lock(engine.mutex);
+                old = engine.strips[p].name;
+            }
+            bool ok = false;
+            auto name = QInputDialog::getText(this, "Rename channel / bus", "Name",
+                                              QLineEdit::Normal, old, &ok)
+                            .trimmed();
+            if (ok && !name.isEmpty()) {
+                std::lock_guard<std::mutex> lock(engine.mutex);
+                engine.strips[p].name = name.left(80);
+            }
+        });
         select->setCheckable(true);
         select->setChecked(p == selected);
         select->setMinimumHeight(54);
@@ -423,11 +555,25 @@ void MainWindow::mixerPage(QWidget *w) {
             rebuildChain();
         });
         auto *tag = new QLabel(p == MasterPart ? "BUS / STEREO"
-                               : p >= 15       ? "DRUM STEM"
+                               : p >= BusFirst ? "GROUP / FX RETURN"
+                               : p >= 15       ? "DRUM NOTE"
                                                : "MIDI INSTRUMENT");
         tag->setObjectName("muted");
         tag->setAlignment(Qt::AlignCenter);
         v->addWidget(tag);
+        auto *summary = new QLabel("No FX");
+        summary->setWordWrap(true);
+        summary->setMaximumHeight(65);
+        summary->setObjectName("muted");
+        fxSummaries[p] = summary;
+        v->addWidget(summary);
+        auto *add = new QPushButton("＋ FX");
+        v->addWidget(add);
+        connect(add, &QPushButton::clicked, this, [this, p] {
+            selected = p;
+            rebuildChain();
+            addEffect();
+        });
         auto *meterLine = new QHBoxLayout;
         v->addLayout(meterLine, 1);
         auto *gain = new QSlider(Qt::Vertical);
@@ -466,14 +612,31 @@ void MainWindow::mixerPage(QWidget *w) {
         s->setCheckable(true);
         s->setEnabled(p != MasterPart);
         ms->addWidget(s);
-        connect(m, &QPushButton::toggled, this, [this, p](bool v) {
-            std::lock_guard<std::mutex> lock(engine.mutex);
-            engine.strips[p].mute = v;
-        });
-        connect(s, &QPushButton::toggled, this, [this, p](bool v) {
-            std::lock_guard<std::mutex> lock(engine.mutex);
-            engine.strips[p].solo = v;
-        });
+        connect(m, &QPushButton::toggled, this, [this, p](bool v) { engine.setMute(p, v); });
+        connect(s, &QPushButton::toggled, this, [this, p](bool v) { engine.setSolo(p, v); });
+        if (p < PartCount) {
+            auto *route = new QComboBox;
+            routeControls[p] = route;
+            route->addItem("→ Master", MasterPart);
+            for (int b = BusFirst; b < TrackCount; ++b)
+                route->addItem("→ " + partName(b), b);
+            route->setToolTip("Group output (post FX / fader)");
+            v->addWidget(route);
+            connect(route, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                    [this, p, route](int i) { engine.setRoute(p, route->itemData(i).toInt()); });
+            auto *send = new QSlider(Qt::Horizontal);
+            send->setRange(0, 100);
+            send->setToolTip("Post-fader send → Bus F (0–100%)");
+            sendControls[p] = send;
+            v->addWidget(new QLabel("Send → Bus F"));
+            v->addWidget(send);
+            connect(send, &QSlider::valueChanged, this, [this, p](int value) {
+                std::lock_guard<std::mutex> lock(engine.mutex);
+                engine.strips[p].fxSend = value / 100.;
+            });
+        } else {
+            v->addWidget(new QLabel(p == MasterPart ? "Stereo output" : "→ Master"));
+        }
         auto *audition = new QPushButton(p == MasterPart ? "Master FX" : "♪ Audition");
         v->addWidget(audition);
         connect(audition, &QPushButton::clicked, this, [this, p] {
@@ -484,21 +647,16 @@ void MainWindow::mixerPage(QWidget *w) {
                 rebuildChain();
             }
         });
-        auto *add = new QPushButton("＋ FX");
-        v->addWidget(add);
-        connect(add, &QPushButton::clicked, this, [this, p] {
-            selected = p;
-            rebuildChain();
-            addEffect();
-        });
     }
     row->addStretch();
     scroll->setWidget(strips);
     connect(filter, qOverload<int>(&QComboBox::currentIndexChanged), this, [widgets](int f) {
         for (int i = 0; i < TrackCount; ++i)
-            widgets[i]->setVisible(f == 0 || i == MasterPart || (f == 1 ? i >= 15 : i < 15));
+            widgets[i]->setVisible(f == 0 || i == MasterPart ||
+                                   (f == 1 && i >= 15 && i < PartCount) || (f == 2 && i < 15) ||
+                                   (f == 3 && i >= BusFirst));
     });
-    filter->setCurrentIndex(1);
+    filter->setCurrentIndex(0);
     auto *fxPanel = new QWidget;
     fxPanel->setObjectName("panel");
     fxPanel->setMinimumWidth(330);
@@ -933,7 +1091,10 @@ void MainWindow::refresh() {
             peak > 0 ? int(std::clamp((20 * std::log10(peak) + 60) / 60., 0., 1.) * 100) : 0;
         if (meters[i])
             meters[i]->setValue(value);
-        double volume, pan;
+        double volume, pan, send;
+        int output;
+        QString channelName;
+        QStringList fxNames;
         bool mute, solo;
         {
             std::lock_guard<std::mutex> lock(engine.mutex);
@@ -942,6 +1103,32 @@ void MainWindow::refresh() {
             pan = s.pan;
             mute = s.mute;
             solo = s.solo;
+            send = s.fxSend;
+            output = s.output;
+            channelName = s.name;
+            for (const auto &fx : s.fx)
+                fxNames << (fx->bypass ? "○ " : "● ") + fx->name();
+        }
+        if (selectButtons[i]) {
+            selectButtons[i]->setText(QString(channelName).replace(" • ", "\n"));
+            selectButtons[i]->setChecked(i == selected);
+        }
+        if (i == selected)
+            chainTitle->setText(channelName + " / FX");
+        if (fxSummaries[i]) {
+            fxSummaries[i]->setText(fxNames.isEmpty()
+                                        ? "No FX"
+                                        : fxNames.mid(0, 3).join("\n") +
+                                              (fxNames.size() > 3
+                                                   ? QString("\n+%1 FX").arg(fxNames.size() - 3)
+                                                   : QString()));
+            fxSummaries[i]->setToolTip(fxNames.join("\n"));
+        }
+        if (i < PartCount) {
+            QSignalBlocker routeBlock(routeControls[i]), sendBlock(sendControls[i]);
+            routeControls[i]->setCurrentIndex(routeControls[i]->findData(output));
+            if (!sendControls[i]->isSliderDown())
+                sendControls[i]->setValue(int(send * 100));
         }
         if (volumeControls[i] && !volumeControls[i]->isSliderDown()) {
             QSignalBlocker block(volumeControls[i]);
@@ -959,6 +1146,11 @@ void MainWindow::refresh() {
             QSignalBlocker block(soloButtons[i]);
             soloButtons[i]->setChecked(solo);
         }
+    }
+    {
+        QSignalBlocker b(melodyMute), c(melodyChannelControl);
+        melodyMute->setChecked(engine.melodyMuted());
+        melodyChannelControl->setValue(engine.melodyChannel() + 1);
     }
     if (wasPlaying && !engine.playing.load() && engine.song.duration > 0 &&
         pos >= engine.song.duration)

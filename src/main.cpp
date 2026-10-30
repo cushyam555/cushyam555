@@ -11,7 +11,7 @@
 int main(int argc, char **argv) {
     QCoreApplication::setApplicationName("BT Karaoke");
     QCoreApplication::setOrganizationName("BT Studio");
-    QCoreApplication::setApplicationVersion("0.1.1");
+    QCoreApplication::setApplicationVersion("0.2.0");
     bt::installStartupLog();
     try {
         bool probe = false;

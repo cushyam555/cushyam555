@@ -1,15 +1,23 @@
-# BT Karaoke Studio 0.1.1
+# BT Karaoke Studio 0.2.0
 
 โปรเจกต์ใหม่ที่เขียนขึ้นสำหรับ BT Karaoke โดยไม่ใช้ซอร์สหรือ BASS จาก HandyKaraoke
 เวอร์ชันเดิมเก็บใน branch `legacy-handykaraoke` และใช้ใบอนุญาตเดิมของตัวเอง
 โค้ดแอปใหม่เป็น MIT; ไลบรารีภายนอกมีใบอนุญาตแยก ดู THIRD_PARTY.md
 
-## รุ่นแรกมีอะไร
+## ฟีเจอร์
 
 - หน้าตาใหม่ธีมมืด คลังเพลง ค้นหา คิวแบบลากเรียง และจอร้องแยก
 - อ่าน MIDI format 0/1, KAR และ NCN พร้อม LYR/CUR รวมไดเรกทอรีย่อย
-- SoundFont synthesizer แยก 15 MIDI instruments และ 8 กลุ่มกลองก่อนประมวลผล
-- Kick, Snare, Closed/Open Hi-hat, Toms, Cymbals, Clap/Rim และ Percussion มี FX Chain แยก
+- SoundFont synthesizer แยก 15 MIDI instruments และกลอง GM ทุกโน้ต 35–81 รวม 47 ชิ้นก่อนประมวลผล
+- FX Chain แยกทั้ง 62 ช่อง, บัส A–F และ Master รวม 69 strips
+- เลือกส่งแต่ละช่องเข้า Master หรือบัสกลุ่มใดก็ได้; ค่าเริ่มต้นกลองเข้า Bus A
+- Post-fader Send ไป Bus F สำหรับใช้ Reverb/Delay ร่วมกัน (ตั้ง FX ให้มี wet 100% เมื่อต้องการ return ล้วน)
+- บัสมี FX, gain, pan, mute, solo และ meter ของตัวเอง; บัสออก Master เท่านั้นเพื่อป้องกัน feedback loop
+- แสดง FX บน strip, คลิกขวาชื่อช่อง/บัสเพื่อเปลี่ยนชื่อ, กรอง Instruments / Drums / Buses
+- ปิดเมโลดี้ได้พร้อมเลือก MIDI channel 1–16 (เริ่มต้น channel 4)
+- นำเข้า NCN ทั้งโฟลเดอร์พร้อมโฟลเดอร์ย่อย, ข้ามเพลงซ้ำ, ยกเลิกระหว่างนำเข้าได้
+- Windows MIDI output ไป loopMIDI หรือ MIDI device; เลือก external-only หรือเสียงในแอปพร้อม MIDI ได้
+- Panic สำหรับหยุดโน้ตค้าง; การ stop/seek/เปลี่ยนคีย์/ตัดเมโลดี้ส่ง MIDI reset ด้วย
 - เพิ่ม FX ซ้ำได้โดยไม่กำหนดเพดานจำนวน ลากเปลี่ยนลำดับ Bypass ลบ และบันทึก Chain Preset
 - FX ในตัว: EQ, Compressor, Gate, Saturation, Delay, Reverb, Limiter และ Gain
 - Master FX, volume, pan, mute, solo, peak meters, ปุ่ม Audition, เปลี่ยนคีย์และ tempo
@@ -20,11 +28,13 @@
 
 ## เริ่มใช้งาน
 
-1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions/runs/41061244559)
-   เลือกรอบที่สำเร็จและ artifact `BT-Karaoke-Studio-0.1.1-Windows-x64`
-2. แตก ZIP เปิดตัวติดตั้ง `BTKaraoke-0.1.1-Windows-x64-setup.exe`
+1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions)
+   เลือกรอบที่สำเร็จและ artifact `BT-Karaoke-Studio-0.2.0-Windows-x64`
+2. แตก ZIP เปิดตัวติดตั้ง `BTKaraoke-0.2.0-Windows-x64-setup.exe`
 3. กด SoundFont เลือก `.sf2` ที่มีสิทธิ์ใช้ แล้ว Import เพลง `.mid` หรือ `.kar`
-   สำหรับ NCN เลือก MIDI ในโฟลเดอร์ Song โดยมี Lyrics และ Cursor ในโครงสร้างเดียวกัน
+   สำหรับ NCN กด **NCN folder…** เลือกโฟลเดอร์รากที่มี Song/Lyrics/Cursor
+   หรือ Import เลือก `.mid`, `.lyr`, `.cur` ที่ตรงกันได้ ต้องเก็บโครงสร้างและชื่อไฟล์เดิม
+   `.lyr`/`.cur` ไม่ใช่ไฟล์เสียง ต้องมี MIDI คู่กัน ไม่ได้อ่านไฟล์ HNK หรือฐานข้อมูล NCN ที่เข้ารหัส
 4. เพิ่มเพลงเข้าคิว เลือก Mixer & FX แล้วกด ＋ FX ของช่องที่ต้องการ
 5. ปลั๊กอิน VST3: เปิด VST3 plugins แล้วสแกนโฟลเดอร์ที่ติดตั้งปลั๊กอิน
    เช่น `C:\Program Files\Common Files\VST3` จากนั้นเพิ่มลงช่องที่ต้องการ
@@ -33,7 +43,22 @@
 ไฟล์โปรเจกต์อ้างอิงไฟล์ภายนอก ต้องเก็บเพลง SoundFont และปลั๊กอินไว้ด้วย
 ตัวติดตั้งยังไม่มีลายเซ็น code signing
 
-## ขอบเขตเวอร์ชัน 0.1
+## ตั้งค่า loopMIDI
+
+1. เปิด loopMIDI แล้วสร้างพอร์ต เช่น `BT Karaoke Out`
+2. ใน BT Karaoke กด **MIDI / loopMIDI** → Refresh ports → เลือกพอร์ต → Connect
+3. ให้โปรแกรมเสียงภายนอกเปิดพอร์ตเดียวกันเป็น MIDI input และเลือกเสียงที่ต้องการ
+4. เลือก External MIDI only เพื่อปิดเสียงภายใน หรือ Internal audio + external MIDI เพื่อใช้ทั้งคู่
+
+loopMIDI ส่งข้อมูลโน้ต/Program Change/CC/Pitch Bend ไม่ใช่เสียง ไม่ส่ง FX, fader, pan,
+Bus audio หรือ SoundFont ของ BT Karaoke ไปด้วย การเปลี่ยนคีย์/เมโลดี้และการกรอง note-on
+ตาม mute/solo ใช้กับ MIDI output ด้วย ต้องตั้งเสียงและ FX ของปลายทางเอง
+ใช้ audio device ของ Windows เป็น clock จึงต้องเริ่ม Audio ได้ก่อนเล่นผ่าน MIDI output
+Pause/การเปลี่ยน mute/solo/reset จะตัดโน้ตภายนอกที่ค้างอยู่; sustained notes จะเริ่มอีกครั้งเมื่อมี note-on ใหม่
+MIDI SysEx, MIDI Clock, per-part output ports และ MIDI input ยังไม่รองรับ
+ไม่ได้เปิดพอร์ตอัตโนมัติเมื่อโหลดโปรเจกต์ ให้เชื่อมต่อพอร์ตใหม่ในแต่ละ session
+
+## ขอบเขตเวอร์ชัน 0.2
 
 รองรับ VST3 x64 แบบ mono/stereo เท่านั้น ไม่รองรับ VST2, AU, AAX, sidechain,
 multichannel buses หรือการชดเชย latency ข้ามช่องโดยอัตโนมัติ ยังไม่รับประกันปลั๊กอินทุกผู้ผลิต
@@ -110,3 +135,13 @@ commit `863ebcd` ผ่านแล้ว พร้อม artifact `BT-Karaoke-S
 ผลนี้เป็น Windows runner ไม่ใช่การทดสอบบนเครื่อง Windows 10 21H2 ของผู้ใช้โดยตรง
 หากยังเปิดไม่ได้ ให้ใช้ Safe Mode จาก Start menu และแจ้งรหัสจากหน้าต่างข้อผิดพลาด
 หรือส่งท้ายไฟล์ `startup.log` / `launcher.log` ในโฟลเดอร์ log ที่ระบุข้างต้น
+
+## โปรเจกต์เดิมและการตรวจรุ่น 0.2.0
+
+อ่านโปรเจกต์ schema 1 จาก 0.1.x ได้ โดยคง Master เดิมและคัดลอก FX ของกลุ่มกลองเดิม
+ไปยังช่องโน้ตที่แยกใหม่; บันทึกใหม่เป็น schema 2 (แอปรุ่นเก่าเปิด schema 2 ไม่ได้)
+การแยก dynamics จากกลุ่มไปเป็นชิ้นอาจทำให้เสียงต่างจากรุ่นเก่า ให้ปรับมิกซ์แล้วบันทึกเป็นไฟล์ใหม่
+
+ชุดทดสอบเพิ่มการแยกกลอง GM ครบ 47 โน้ต, ผลรวมสัญญาณบัส/Send/FX/mute/solo,
+การป้องกัน routing วน, ปิดเมโลดี้, external-only silence, state round-trip และ migration
+ยังต้องทดสอบ loopMIDI/โปรแกรมเสียง/ปลั๊กอินของผู้ใช้บน Windows จริง

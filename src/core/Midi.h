@@ -23,5 +23,6 @@ struct Song {
 Song readSong(const QString &path);
 int partFor(int channel, int note);
 QString partName(int part);
-constexpr int PartCount = 23, MasterPart = 23, TrackCount = 24;
+int drumNote(int part);
+constexpr int PartCount = 62, MasterPart = 62, BusFirst = 63, BusCount = 6, TrackCount = 69;
 } // namespace bt

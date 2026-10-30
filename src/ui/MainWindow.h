@@ -10,6 +10,9 @@ class QSlider;
 class QStackedWidget;
 class QLineEdit;
 class QProcess;
+class QComboBox;
+class QCheckBox;
+class QSpinBox;
 namespace bt {
 class MainWindow final : public QMainWindow {
     std::shared_ptr<Engine> engineOwner = std::make_shared<Engine>();
@@ -33,7 +36,15 @@ class MainWindow final : public QMainWindow {
     std::array<QPushButton *, TrackCount> selectButtons{}, muteButtons{}, soloButtons{};
     std::array<QSlider *, TrackCount> volumeControls{}, panControls{};
     bool wasPlaying = false;
+    std::array<QComboBox *, PartCount> routeControls{};
+    std::array<QSlider *, PartCount> sendControls{};
+    std::array<QLabel *, TrackCount> fxSummaries{};
+    QCheckBox *melodyMute = nullptr;
+    QSpinBox *melodyChannelControl = nullptr;
     void importSongs();
+    void importPaths(const QStringList &paths);
+    void importFolder();
+    void midiSettings();
     void refreshLibrary(const QString &filter = {});
     void loadRow(int);
     void next();

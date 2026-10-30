@@ -6,6 +6,29 @@
 #include <QtTest>
 #include <cmath>
 #include <future>
+class TestSignal : public bt::Effect {
+    float value;
+    bool source;
+
+  public:
+    TestSignal(float v, bool generate) : value(v), source(generate) {}
+    QString name() const override {
+        return "Test signal";
+    }
+    void process(float *b, int n, const std::vector<bt::MidiEvent> &, double, double) override {
+        if (bypass)
+            return;
+        for (int i = 0; i < 2 * n; ++i)
+            b[i] = source ? value : b[i] * value;
+    }
+    std::vector<bt::Parameter> parameters() const override {
+        return {};
+    }
+    void setParameter(int, double) override {}
+    QJsonObject save() const override {
+        return {};
+    }
+};
 class CoreTests : public QObject {
     Q_OBJECT
     QByteArray midi() {
@@ -32,23 +55,25 @@ class CoreTests : public QObject {
     }
     void ncnCompanions() {
         QTemporaryDir d;
-        for (const auto &s : {"Song/set", "Lyrics/set", "Cursor/set"})
+        for (const auto &s : {"sOnG/set", "lYrIcS/set", "cUrSoR/set"})
             QVERIFY(QDir().mkpath(d.path() + "/" + s));
-        QFile mid(d.path() + "/Song/set/001.mid");
+        QFile mid(d.path() + "/sOnG/set/001.MID");
         QVERIFY(mid.open(QFile::WriteOnly));
         mid.write(midi());
         mid.close();
-        QFile lyr(d.path() + "/Lyrics/set/001.lyr");
+        QFile lyr(d.path() + "/lYrIcS/set/001.LyR");
         QVERIFY(lyr.open(QFile::WriteOnly));
         lyr.write("NCN title\nArtist\nC\n\n");
         lyr.write(QByteArray::fromHex("a1a2"));
         lyr.close();
-        QFile cur(d.path() + "/Cursor/set/001.cur");
+        QFile cur(d.path() + "/cUrSoR/set/001.CuR");
         QVERIFY(cur.open(QFile::WriteOnly));
         cur.write(QByteArray::fromHex("00001800"));
         cur.close();
         auto song = bt::readSong(mid.fileName());
         QCOMPARE(song.title, QString("NCN title"));
+        QCOMPARE(bt::readSong(lyr.fileName()).path, mid.fileName());
+        QCOMPARE(bt::readSong(cur.fileName()).path, mid.fileName());
         QCOMPARE(song.lyrics.size(), 2);
         QCOMPARE(song.lyrics[0].text, QString::fromUtf8("ก"));
         QVERIFY(std::abs(song.lyrics[1].time - .5) < .001);
@@ -67,6 +92,107 @@ class CoreTests : public QObject {
         QCOMPARE(bt::partFor(9, 42), 17);
         QVERIFY(bt::partFor(9, 46) != bt::partFor(9, 42));
         QCOMPARE(bt::partFor(0, 36), 0);
+    }
+    void midiPortFailureAndCleanup() {
+        bt::MidiOutput output;
+        QString message;
+        QVERIFY(!output.open(0x7fffffff, message));
+        QVERIFY(!message.isEmpty());
+        output.send({0, 0, 0x90, 60, 100});
+        output.panic();
+        output.close();
+        output.close();
+        // Enumeration does not require an installed loopMIDI port.
+        auto ports = bt::MidiOutput::ports();
+        for (const auto &name : ports)
+            QVERIFY(!name.isEmpty());
+    }
+    void allGmDrumsAreIndependent() {
+        QSet<int> parts;
+        for (int note = 35; note <= 81; ++note) {
+            int part = bt::partFor(9, note);
+            QVERIFY(part >= 15 && part < bt::PartCount);
+            QCOMPARE(bt::drumNote(part), note);
+            QVERIFY(!parts.contains(part));
+            parts.insert(part);
+            QVERIFY(!bt::partName(part).isEmpty());
+        }
+        QCOMPARE(parts.size(), 47);
+    }
+    void busRoutingAndSend() {
+        bt::Engine engine;
+        for (auto &strip : engine.strips)
+            strip.volume = 1;
+        engine.strips[bt::MasterPart].fx.clear();
+        engine.strips[0].fx.push_back(std::make_shared<TestSignal>(.1f, true));
+        engine.strips[1].fx.push_back(std::make_shared<TestSignal>(.05f, true));
+        engine.strips[bt::BusFirst].fx.push_back(std::make_shared<TestSignal>(2.f, false));
+        QVERIFY(engine.setRoute(0, bt::BusFirst));
+        QVERIFY(!engine.setRoute(bt::BusFirst, bt::BusFirst + 1)); // cycles impossible
+        QVERIFY(!engine.setRoute(0, 0));
+        float b[128];
+        engine.render(b, 64);
+        QVERIFY(std::abs(b[0] - .25f) < .00001f);
+        engine.strips[0].fxSend = .5;
+        engine.strips[bt::TrackCount - 1].fx.push_back(std::make_shared<TestSignal>(2.f, false));
+        engine.render(b, 64);
+        QVERIFY(std::abs(b[0] - .35f) < .00001f);
+        engine.strips[bt::BusFirst].mute = true;
+        engine.render(b, 64);
+        QVERIFY(std::abs(b[0] - .15f) < .00001f);
+        engine.strips[bt::TrackCount - 1].solo = true;
+        engine.render(b, 64);
+        QVERIFY(std::abs(b[0] - .1f) < .00001f); // bus solo excludes direct channels
+        engine.setOutputMode(bt::Engine::OutputMode::Midi);
+        engine.render(b, 64);
+        for (auto v : b)
+            QCOMPARE(v, 0.f);
+    }
+    void melodyMuteAndProjectState() {
+        bt::Engine engine;
+        engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
+        bt::Song song;
+        song.duration = 2;
+        song.events = {{0, 0, 0x93, 60, 100}, {1, 480, 0x83, 60, 0}};
+        engine.setMelody(true, 3);
+        engine.load(song);
+        engine.play();
+        float b[512];
+        engine.render(b, 256);
+        for (auto v : b)
+            QVERIFY(std::abs(v) < .000001f);
+        engine.setMelody(false, 3);
+        engine.seek(0);
+        engine.play();
+        engine.render(b, 256);
+        bool audible = false;
+        for (auto v : b)
+            audible |= std::abs(v) > .00001f;
+        QVERIFY(audible);
+        engine.setMelody(true, 3);
+        QVERIFY(engine.setRoute(3, bt::BusFirst + 2));
+        engine.strips[3].fxSend = .37;
+        engine.strips[bt::BusFirst + 2].fx.push_back(bt::builtin("Delay", 48000));
+        auto state = engine.save();
+        state["song"] = QString();
+        bt::Engine restored;
+        QVERIFY(restored.restore(state).isEmpty());
+        QVERIFY(restored.melodyMuted());
+        QCOMPARE(restored.melodyChannel(), 3);
+        QCOMPARE(restored.strips[3].output, bt::BusFirst + 2);
+        QCOMPARE(restored.strips[3].fxSend, .37);
+        QCOMPARE(restored.strips[bt::BusFirst + 2].fx.size(), size_t(1));
+    }
+    void legacyProjectMigration() {
+        QJsonArray tracks;
+        for (int i = 0; i < 24; ++i)
+            tracks.append(QJsonObject{{"volume", i == 23 ? .42 : .7}, {"mute", i == 19}});
+        bt::Engine engine;
+        QVERIFY(engine.restore(QJsonObject{{"schema", 1}, {"tracks", tracks}}).isEmpty());
+        QCOMPARE(engine.strips[bt::MasterPart].volume, .42);
+        QVERIFY(engine.strips[bt::partFor(9, 48)].mute);
+        QCOMPARE(engine.strips[bt::BusFirst].volume, 1.);
+        QCOMPARE(engine.strips[0].output, bt::MasterPart);
     }
     void arbitraryChains() {
         bt::Engine engine;

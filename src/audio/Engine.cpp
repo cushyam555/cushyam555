@@ -15,6 +15,12 @@
 #include <tsf.h>
 namespace bt {
 struct Engine::Impl {
+    Engine *owner = nullptr;
+    MidiOutput midi;
+    OutputMode outputMode = OutputMode::Internal;
+    bool melodyOff = false;
+    int melody = 3;
+    std::array<std::array<float, 512>, BusCount> buses{};
     ma_device device{};
     bool initialized = false;
     std::mutex deviceMutex, errorMutex;
@@ -49,9 +55,13 @@ struct Engine::Impl {
             tsf_close(base);
     }
     void panic() {
+        midi.panic();
         for (int p = 0; p < PartCount; ++p) {
             if (synth[p])
                 tsf_channel_sounds_off_all(synth[p], 0);
+            pending[p].clear();
+            pending[p].push_back({0, 0, 0xb0, 64, 0});
+            pending[p].push_back({0, 0, 0xb0, 123, 0});
             for (int note = 0; note < 128; ++note)
                 pending[p].push_back({0, 0, 0x80, note, 0});
         }
@@ -81,6 +91,31 @@ struct Engine::Impl {
     }
     void event(const MidiEvent &e) {
         int channel = e.status & 15, kind = e.status & 240;
+        int part = partFor(channel, e.data1);
+        bool anySolo = false;
+        for (int i = 0; i < PartCount; ++i)
+            anySolo |= owner->strips[i].solo;
+        auto &strip = owner->strips[part];
+        bool muted = strip.mute || (anySolo && !strip.solo) || owner->strips[MasterPart].mute;
+        bool busSolo = false;
+        for (int b = BusFirst; b < TrackCount; ++b)
+            busSolo |= owner->strips[b].solo;
+        if (strip.output >= BusFirst && strip.output < TrackCount) {
+            muted |=
+                owner->strips[strip.output].mute || (busSolo && !owner->strips[strip.output].solo);
+        } else if (busSolo) {
+            muted = true;
+        }
+        bool melodyBlocked = melodyOff && channel == melody;
+        if (outputMode != OutputMode::Internal) {
+            auto event = e;
+            if (channel != 9 && (kind == 0x80 || kind == 0x90))
+                event.data1 = std::clamp(e.data1 + transpose, 0, 127);
+            if (!(kind == 0x90 && e.data2 && (muted || melodyBlocked)))
+                midi.send(event);
+        }
+        if (kind == 0x90 && e.data2 && melodyBlocked)
+            return;
         // Splitting drum voices must preserve the normal closed/open hi-hat choke.
         if (channel == 9 && kind == 0x90 && e.data2 && (e.data1 == 42 || e.data1 == 44)) {
             send(18, {e.time, e.tick, 0x80, 46, 0});
@@ -95,8 +130,13 @@ struct Engine::Impl {
     }
 };
 Engine::Engine() : d(new Impl) {
+    d->owner = this;
     for (int i = 0; i < TrackCount; ++i)
         strips[i].name = partName(i);
+    for (int b = BusFirst; b < TrackCount; ++b)
+        strips[b].volume = 1;
+    for (int p = 15; p < PartCount; ++p)
+        strips[p].output = BusFirst;
     strips[MasterPart].volume = .8;
     strips[MasterPart].fx.push_back(builtin("Limiter", Rate));
 }
@@ -260,6 +300,7 @@ void Engine::pause() {
     std::lock_guard<std::mutex> lock(mutex);
     playing = false;
     d->suspended = true;
+    d->midi.panic();
 }
 void Engine::stop() {
     playing = false;
@@ -298,15 +339,7 @@ void Engine::testNote(int part, int note) {
         d->panic();
         d->suspended = false;
     }
-    int n = part == 15   ? 36
-            : part == 16 ? 38
-            : part == 17 ? 42
-            : part == 18 ? 46
-            : part == 19 ? 45
-            : part == 20 ? 49
-            : part == 21 ? 39
-            : part >= 22 ? 60
-                         : note;
+    int n = part >= 15 ? drumNote(part) : note;
     d->send(part, {0, 0, 0x90, n, 105});
     d->auditions.push_back({part, n, d->wall + .35});
 }
@@ -342,6 +375,11 @@ void Engine::render(float *out, int frames) {
                 it = d->auditions.erase(it);
             } else
                 ++it;
+        for (auto &bus : d->buses)
+            bus.fill(0);
+        bool busSolo = false;
+        for (int b = BusFirst; b < TrackCount; ++b)
+            busSolo |= strips[b].solo;
         bool anySolo = false;
         for (int i = 0; i < PartCount; ++i)
             anySolo |= strips[i].solo;
@@ -362,11 +400,41 @@ void Engine::render(float *out, int frames) {
                   r = float(strip.volume * (strip.pan < 0 ? 1 + strip.pan : 1));
             for (int f = 0; f < n; ++f) {
                 float a = mute ? 0 : buffer[2 * f] * l, b = mute ? 0 : buffer[2 * f + 1] * r;
-                out[2 * (done + f)] += a;
-                out[2 * (done + f) + 1] += b;
+                if (strip.output >= BusFirst && strip.output < TrackCount) {
+                    auto &bus = d->buses[strip.output - BusFirst];
+                    bus[2 * f] += a;
+                    bus[2 * f + 1] += b;
+                } else if (!busSolo) {
+                    out[2 * (done + f)] += a;
+                    out[2 * (done + f) + 1] += b;
+                }
+                if (strip.fxSend > 0) {
+                    auto &send = d->buses[BusCount - 1];
+                    send[2 * f] += a * float(strip.fxSend);
+                    send[2 * f + 1] += b * float(strip.fxSend);
+                }
                 peak = std::max(peak, std::max(std::abs(a), std::abs(b)));
             }
             peaks[p] = std::max(peak, peaks[p].load() * .9f);
+        }
+        for (int b = BusFirst; b < TrackCount; ++b) {
+            auto &strip = strips[b];
+            auto *buffer = d->buses[b - BusFirst].data();
+            for (auto &fx : strip.fx) {
+                fx->transportPlaying = playing.load();
+                fx->process(buffer, n, d->empty, song.bpm * d->speed, pos);
+            }
+            float peak = 0;
+            bool muted = strip.mute || (busSolo && !strip.solo);
+            float l = float(strip.volume * (strip.pan > 0 ? 1 - strip.pan : 1));
+            float r = float(strip.volume * (strip.pan < 0 ? 1 + strip.pan : 1));
+            for (int f = 0; f < n; ++f) {
+                float a = muted ? 0 : buffer[2 * f] * l, c = muted ? 0 : buffer[2 * f + 1] * r;
+                out[2 * (done + f)] += a;
+                out[2 * (done + f) + 1] += c;
+                peak = std::max(peak, std::max(std::abs(a), std::abs(c)));
+            }
+            peaks[b] = std::max(peak, peaks[b].load() * .9f);
         }
         auto &master = strips[MasterPart];
         for (auto &fx : master.fx) {
@@ -375,7 +443,7 @@ void Engine::render(float *out, int frames) {
         }
         float peak = 0;
         for (int i = 2 * done; i < 2 * (done + n); ++i) {
-            float v = master.mute
+            float v = (master.mute || d->outputMode == OutputMode::Midi)
                           ? 0
                           : out[i] * float(master.volume *
                                            ((i % 2 == 0 && master.pan > 0)   ? 1 - master.pan
@@ -396,6 +464,61 @@ void Engine::render(float *out, int frames) {
     auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     cpu = elapsed / (frames / Rate) * 100.;
 }
+void Engine::setOutputMode(OutputMode mode) {
+    std::lock_guard<std::mutex> lock(mutex);
+    d->panic();
+    d->outputMode = mode;
+}
+bool Engine::openMidiOutput(int port, QString &error) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return d->midi.open(port, error);
+}
+void Engine::closeMidiOutput() {
+    std::lock_guard<std::mutex> lock(mutex);
+    d->midi.close();
+    d->outputMode = OutputMode::Internal;
+}
+void Engine::setMelody(bool muted, int channel) {
+    std::lock_guard<std::mutex> lock(mutex);
+    d->panic();
+    d->melodyOff = muted;
+    d->melody = std::clamp(channel, 0, 15);
+}
+bool Engine::melodyMuted() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return d->melodyOff;
+}
+int Engine::melodyChannel() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return d->melody;
+}
+void Engine::panic() {
+    std::lock_guard<std::mutex> lock(mutex);
+    d->panic();
+}
+void Engine::setMute(int part, bool muted) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (part < 0 || part >= TrackCount)
+        return;
+    strips[part].mute = muted;
+    d->midi.panic();
+}
+void Engine::setSolo(int part, bool solo) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (part < 0 || part >= TrackCount)
+        return;
+    strips[part].solo = solo;
+    d->midi.panic();
+}
+bool Engine::setRoute(int part, int output) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (part < 0 || part >= PartCount ||
+        (output != MasterPart && (output < BusFirst || output >= TrackCount)))
+        return false;
+    strips[part].output = output;
+    d->midi.panic();
+    return true;
+}
 QJsonObject Engine::save() {
     std::lock_guard<std::mutex> lock(mutex);
     QJsonArray tracks;
@@ -408,9 +531,12 @@ QJsonObject Engine::save() {
                                   {"pan", s.pan},
                                   {"mute", s.mute},
                                   {"solo", s.solo},
+                                  {"output", s.output},
+                                  {"send", s.fxSend},
                                   {"fx", effects}});
     }
-    return {{"schema", 1}, {"soundfont", d->sfPath}, {"song", song.path}, {"tracks", tracks}};
+    return {{"schema", 2},      {"soundfont", d->sfPath},      {"song", song.path},
+            {"tracks", tracks}, {"melodyMuted", d->melodyOff}, {"melodyChannel", d->melody}};
 }
 std::shared_ptr<Effect> Engine::restoreEffect(const QJsonObject &o) {
     std::shared_ptr<Effect> f;
@@ -430,7 +556,7 @@ std::shared_ptr<Effect> Engine::restoreEffect(const QJsonObject &o) {
     return f;
 }
 QStringList Engine::restore(const QJsonObject &o) {
-    if (o["schema"].toInt() != 1)
+    if (o["schema"].toInt() != 1 && o["schema"].toInt() != 2)
         throw std::runtime_error("Unsupported project format");
     playing = false;
     QStringList warnings;
@@ -446,7 +572,33 @@ QStringList Engine::restore(const QJsonObject &o) {
         } catch (const std::exception &e) {
             warnings << e.what();
         }
+    setMelody(o["melodyMuted"].toBool(), o["melodyChannel"].toInt(3));
     auto tracks = o["tracks"].toArray();
+    if (o["schema"].toInt() == 1 && tracks.size() == 24) {
+        auto legacy = tracks;
+        tracks = QJsonArray();
+        for (int p = 0; p < TrackCount; ++p) {
+            int old = p;
+            if (p == MasterPart)
+                old = 23;
+            else if (p >= BusFirst) {
+                tracks.append(QJsonObject{{"volume", 1.0}});
+                continue;
+            } else if (p >= 23) {
+                int note = drumNote(p);
+                old = note == 35                                                             ? 15
+                      : note == 40                                                           ? 16
+                      : note == 44                                                           ? 17
+                      : (note == 41 || note == 43 || note == 47 || note == 48 || note == 50) ? 19
+                      : (note == 51 || note == 52 || note == 55 || note == 57 || note == 59) ? 20
+                      : note == 37                                                           ? 21
+                                                                                             : 22;
+            }
+            auto t = legacy[old].toObject();
+            t["name"] = partName(p);
+            tracks.append(t);
+        }
+    }
     for (int i = 0; i < std::min(int(tracks.size()), TrackCount); ++i) {
         auto t = tracks[i].toObject();
         std::vector<std::shared_ptr<Effect>> effects;
@@ -462,6 +614,10 @@ QStringList Engine::restore(const QJsonObject &o) {
         strips[i].pan = std::clamp(t["pan"].toDouble(), -1., 1.);
         strips[i].mute = t["mute"].toBool();
         strips[i].solo = t["solo"].toBool();
+        int output = t["output"].toInt(MasterPart);
+        strips[i].output =
+            (i < PartCount && output >= BusFirst && output < TrackCount) ? output : MasterPart;
+        strips[i].fxSend = i < PartCount ? std::clamp(t["send"].toDouble(), 0., 1.) : 0;
         strips[i].fx = std::move(effects);
     }
     return warnings;

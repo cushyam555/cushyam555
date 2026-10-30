@@ -1,4 +1,4 @@
-# BT Karaoke Studio 0.1 architecture
+# BT Karaoke Studio 0.2 architecture
 
 Application source is independent of HandyKaraoke. The old implementation is
 preserved in the legacy-handykaraoke branch, not compiled into this application.
@@ -7,11 +7,17 @@ preserved in the legacy-handykaraoke branch, not compiled into this application.
 
 MIDI/KAR/NCN file -> bounded parser and tempo-to-seconds conversion -> transport
 scheduler -> per-part SoundFont instances -> ordered FX chains -> strip gain/pan
-and mute/solo -> stereo sum -> master FX -> master gain -> output safety clamp
+and mute/solo -> direct master or group bus A–F (plus post-fader send to F)
+-> ordered bus FX -> bus gain/pan/mute/solo -> stereo sum -> master FX -> master gain -> output safety clamp
 -> miniaudio default output device.
 
-There are 15 melodic MIDI parts and 8 percussion groups. Hi-hat choke is explicitly
-preserved across the closed/open groups. TSF copies share the loaded sample data
+There are 15 melodic MIDI parts and 47 independent GM drum-note parts (35–81).
+The first eight legacy part indices retain their representative note identities;
+remaining GM notes occupy indices 23–61. Master is 62 and buses A–F are 63–68.
+Hi-hat choke is explicitly preserved across closed/pedal/open channels.
+Bus outputs are fixed to Master, so the graph is acyclic. Direct channels are
+excluded when any group bus is soloed. Post-fader sends to Bus F remain independent
+of group bus gain. Set return FX to fully wet for conventional send/return use. TSF copies share the loaded sample data
 but have independent voices so Kick FX cannot process Snare audio.
 
 VST3 instruments replace the signal at their position in the chain and receive
@@ -72,3 +78,19 @@ backend, so a missing audio device is reported rather than presented as ready.
 Safe mode skips automatic audio initialization. Startup tests exercise both the
 normal and safe paths, and unit tests inject delayed/failed initialization and
 verify engine lifetime when its window owner releases it during initialization.
+
+## External MIDI (0.2)
+
+A WinMM worker owns the MIDI device and performs driver calls outside the audio
+callback. A bounded 8192-message queue resets on overflow. Transport events keep
+the source MIDI channel and apply melodic transpose. Melody and mute/solo filter
+note-on; note-off always passes. Stop, seek, transpose, melody/mute/solo and port
+changes reset pending notes. Reset also sends sustain-off and all-notes-off.
+The miniaudio render callback remains the transport clock, including MIDI-only
+mode; an active output device is required. MIDI-only mode mutes final PCM output.
+There is no SysEx, MIDI Clock or audio-to-loopMIDI conversion. UI mixer gain/pan
+and audio FX are not converted into external MIDI automation. External output
+cannot be tested end-to-end without an installed loopback port and receiving app.
+Project schema 2 stores routing, send, names and melody settings; it migrates old
+24-strip schema 1 projects, replicating each legacy drum-group chain per GM note.
+Ports are intentionally reconnected by the user per session.
