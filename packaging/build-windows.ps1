@@ -56,8 +56,20 @@ try {
         Invoke-Checked (Join-Path $testBuild 'release/bt-core-tests.exe') @('-o', ((Join-Path $testBuild 'results.txt') + ',txt'))
     } finally { $env:PATH = $oldPath }
 } finally { Pop-Location }
-$process = Start-Process -FilePath (Join-Path $stage 'HandyKaraoke.exe') -ArgumentList '--smoke-test' -WorkingDirectory $stage -PassThru
+$info = [System.Diagnostics.ProcessStartInfo]::new()
+$info.FileName = Join-Path $stage 'HandyKaraoke.exe'
+$info.Arguments = '--smoke-test'
+$info.WorkingDirectory = $stage
+$info.UseShellExecute = $false
+$info.RedirectStandardOutput = $true
+$info.RedirectStandardError = $true
+$info.Environment['QT_FORCE_STDERR_LOGGING'] = '1'
+$process = [System.Diagnostics.Process]::Start($info)
+$stdout = $process.StandardOutput.ReadToEndAsync()
+$stderr = $process.StandardError.ReadToEndAsync()
 if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Application smoke test timed out' }
+Write-Host $stdout.GetAwaiter().GetResult()
+Write-Host $stderr.GetAwaiter().GetResult()
 if ($process.ExitCode -ne 0) { throw "Application smoke test failed: $($process.ExitCode)" }
 Write-Host "Staged and tested application: $stage"
 Write-Host 'To build the installer: ISCC.exe packaging/bt-x64.iss'

@@ -1,6 +1,7 @@
 #include "MidiPlayer.h"
 
 #include <QtMath>
+#include <memory>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -14,10 +15,7 @@ MidiPlayer::MidiPlayer(QObject *parent) : QObject(parent)
 
     _midiSynth  = new MidiSynthesizer();
 
-    if (midiDevices().size() > 0)
-    {
-        setMidiOut(0);
-    }
+    // MainWindow selects the saved output; hardware MIDI is optional.
 }
 
 MidiPlayer::~MidiPlayer()
@@ -209,9 +207,14 @@ bool MidiPlayer::setMidiOut(int portNumber)
     } else {
         MidiOut *out = _midiOuts[portNumber];
         if (!out) {
-            out = new MidiOut();
-            out->openPort(portNumber);
-            _midiOuts[portNumber] = out;
+            try {
+                std::unique_ptr<MidiOut> candidate(new MidiOut());
+                candidate->openPort(portNumber);
+                out = candidate.release();
+                _midiOuts[portNumber] = out;
+            } catch (const RtMidiError &) {
+                return false;
+            }
         }
         out->setVolume(_volume / 100.0f);
         result = out->isPortOpen();

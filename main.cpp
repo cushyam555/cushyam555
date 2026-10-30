@@ -10,6 +10,8 @@
 #include <QTimer>
 #include <QTemporaryDir>
 #include <QDebug>
+#include <cstdio>
+#include <exception>
 #include <QPainter>
 #include <QLinearGradient>
 
@@ -32,7 +34,7 @@ void loadVSTi(QSplashScreen *splash, MidiSynthesizer *synth);
 void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth);
 #endif
 
-int main(int argc, char *argv[])
+int runApplication(int argc, char *argv[])
 {
     QApplication a(argc, argv); 
 
@@ -112,7 +114,9 @@ int main(int argc, char *argv[])
     #endif
     //----------------------------------
 
+    if (smokeTest) { std::fprintf(stderr, "BT startup: constructing main window\n"); std::fflush(stderr); }
     MainWindow w;
+    if (smokeTest) { std::fprintf(stderr, "BT startup: main window constructed\n"); std::fflush(stderr); }
     if (!w.database()->isOpenned()) {
         if (!smokeTest)
             QMessageBox::critical(&w, "BT Karaoke",
@@ -131,6 +135,7 @@ int main(int argc, char *argv[])
     #endif
     w.synthMixerDialog()->setFXToSynth();
 
+    if (smokeTest) { std::fprintf(stderr, "BT startup: resources loaded\n"); std::fflush(stderr); }
     w.show();
 
     splash->finish(&w);
@@ -313,3 +318,15 @@ void makeVSTList(QSplashScreen *splash, MidiSynthesizer *synth)
 }
 
 #endif
+
+int main(int argc, char *argv[])
+{
+    try {
+        return runApplication(argc, argv);
+    } catch (const RtMidiError &error) {
+        std::fprintf(stderr, "BT Karaoke MIDI initialization failed: %s\n", error.getMessage().c_str());
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "BT Karaoke initialization failed: %s\n", error.what());
+    }
+    return 1;
+}
