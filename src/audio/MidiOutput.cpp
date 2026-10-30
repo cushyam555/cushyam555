@@ -1,12 +1,12 @@
 #include "MidiOutput.h"
-#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
 #include <thread>
 #ifdef _WIN32
-#include <mmsystem.h>
 #include <windows.h>
+
+#include <mmsystem.h>
 #endif
 namespace bt {
 struct MidiOutput::Impl {
