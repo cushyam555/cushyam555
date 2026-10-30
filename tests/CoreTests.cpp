@@ -5,6 +5,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 #include <cmath>
+#include <future>
 class CoreTests : public QObject {
     Q_OBJECT
     QByteArray midi() {
@@ -177,6 +178,41 @@ class CoreTests : public QObject {
             audible |= std::abs(sample) > .00001f;
         QVERIFY(audible);
         QVERIFY(engine.position.load() > paused);
+    }
+    void audioStartupIsAsynchronous() {
+        auto engine = std::make_shared<bt::Engine>();
+        auto release = std::make_shared<std::promise<void>>();
+        auto gate = release->get_future().share();
+        auto entered = std::make_shared<std::atomic<bool>>(false);
+        engine->startAudioAsync([gate, entered](QString &error) {
+            *entered = true;
+            gate.wait_for(std::chrono::seconds(2));
+            error = "Simulated driver failure";
+            return false;
+        });
+        QTRY_VERIFY(entered->load());
+        QCOMPARE(engine->audioState.load(), bt::Engine::AudioState::Starting);
+        release->set_value();
+        QTRY_COMPARE(engine->audioState.load(), bt::Engine::AudioState::Failed);
+        QCOMPARE(engine->audioError(), QString("Simulated driver failure"));
+    }
+    void closingDuringAudioStartupIsSafe() {
+        auto engine = std::make_shared<bt::Engine>();
+        std::weak_ptr<bt::Engine> weak = engine;
+        auto release = std::make_shared<std::promise<void>>();
+        auto gate = release->get_future().share();
+        auto entered = std::make_shared<std::atomic<bool>>(false);
+        engine->startAudioAsync([gate, entered](QString &) {
+            *entered = true;
+            gate.wait_for(std::chrono::seconds(2));
+            return false;
+        });
+        QTRY_VERIFY(entered->load());
+        engine->stopAudio();
+        engine.reset();
+        QVERIFY(!weak.expired());
+        release->set_value();
+        QTRY_VERIFY(weak.expired());
     }
     void realVst() {
         auto path = qEnvironmentVariable("BT_TEST_VST3");

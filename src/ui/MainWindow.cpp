@@ -83,6 +83,16 @@ MainWindow::MainWindow(bool offline) {
                 }
         },
         this);
+    button(
+        "Audio", top,
+        [this] {
+            if (engine.audioState == Engine::AudioState::Ready)
+                QMessageBox::information(this, "Audio",
+                                         "The default system audio output is ready.");
+            else
+                enableAudio();
+        },
+        this);
     auto *nav = new QHBoxLayout;
     outer->addLayout(nav);
     pages = new QStackedWidget;
@@ -259,19 +269,72 @@ MainWindow::MainWindow(bool offline) {
     auto *timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, [this] { refresh(); });
     timer->start(40);
-    if (!offline) {
-        QString audioError;
-        if (!engine.startAudio(audioError))
-            status->setText(audioError);
-    }
+    status->setWordWrap(true);
+    status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    status->setMinimumWidth(100);
+    if (!offline)
+        QTimer::singleShot(0, this, [this] { enableAudio(); });
+    else
+        status->setText("Safe mode • audio is disabled. Click Audio to enable it.");
+}
+void MainWindow::enableAudio() {
+    if (audioProbe || engine.audioState == Engine::AudioState::Starting)
+        return;
+    audioAttempted = true;
+    status->setText("Checking audio… The window remains available.");
+    qInfo("BT_AUDIO_PROBE requested after UI construction");
+    auto *probe = new QProcess(this);
+    audioProbe = probe;
+    connect(probe, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [this, probe](int code, QProcess::ExitStatus result) {
+                if (audioProbe != probe)
+                    return;
+                audioProbe = nullptr;
+                auto output = QString::fromUtf8(probe->readAllStandardError());
+                const bool timeout = probe->property("timedOut").toBool();
+                probe->deleteLater();
+                if (code == 0 && result == QProcess::NormalExit) {
+                    status->setText("Starting audio in the background…");
+                    qInfo("BT_AUDIO_START background initialization requested");
+                    engine.startAudioAsync();
+                } else {
+                    status->setText(timeout ? "Audio driver check timed out. Safe mode remains "
+                                              "available. Click Audio to retry."
+                                            : "Audio is unavailable. You can use the mixer "
+                                              "offline; click Audio to retry.");
+                    qWarning().noquote() << "BT_AUDIO_PROBE failed" << code << output.right(2000);
+                }
+            });
+    connect(probe, &QProcess::errorOccurred, this, [this, probe](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart || audioProbe != probe)
+            return;
+        audioProbe = nullptr;
+        status->setText("Audio check could not start. The window remains available.");
+        qWarning() << "BT_AUDIO_PROBE failed to start" << probe->errorString();
+        probe->deleteLater();
+    });
+    QTimer::singleShot(12000, probe, [probe] {
+        if (probe->state() != QProcess::NotRunning) {
+            probe->setProperty("timedOut", true);
+            probe->kill();
+        }
+    });
+    probe->start(QCoreApplication::applicationFilePath(), {"--audio-probe"});
 }
 MainWindow::~MainWindow() {
+    if (audioProbe) {
+        audioProbe->kill();
+        audioProbe->waitForFinished(1000);
+    }
     if (stage)
         delete stage;
     engine.stopAudio();
 }
 void MainWindow::selectPage(int index) {
     pages->setCurrentIndex(index);
+}
+bool MainWindow::startupSettled() const {
+    return audioAttempted && !audioProbe && engine.audioState != Engine::AudioState::Starting;
 }
 bool MainWindow::smokeReady() const {
     return chain && meters[15] && centralWidget() && engine.strips[MasterPart].fx.size() == 1;
@@ -840,6 +903,19 @@ void MainWindow::showStage() {
         stage->raise();
 }
 void MainWindow::refresh() {
+    auto state = engine.audioState.load();
+    if (audioAttempted && state != lastAudioState) {
+        lastAudioState = state;
+        if (state == Engine::AudioState::Ready) {
+            status->setText("Audio ready • select a SoundFont and import songs");
+            qInfo("BT_AUDIO_START ready");
+        } else if (state == Engine::AudioState::Failed) {
+            auto error = engine.audioError();
+            status->setText(error + " • Click Audio to retry.");
+            qWarning().noquote() << "BT_AUDIO_START failed:" << error;
+        }
+    }
+
     double pos = engine.position.load();
     clock->setText(timeText(pos) + " / " + timeText(engine.song.duration));
     if (!seek->isSliderDown())

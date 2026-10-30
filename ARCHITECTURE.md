@@ -54,3 +54,21 @@ in 0.1. No recording, microphone processing, MP4/MP3 player or QR request server
 is claimed. The tests include an original gain VST3 module, not a commercial
 plugin-compatibility certification. Qt and the audio/hosting SDKs keep their own
 licenses; see THIRD_PARTY.md.
+
+## Startup lifecycle (0.1.1)
+
+The Windows entry point is a small, statically linked native launcher. It starts
+BTKaraokeApp.exe, preserves the exit code, and reports startup errors without
+requiring Qt. The Qt process logs before constructing QApplication.
+
+MainWindow is shown before a zero-delay task launches a separate audio-probe
+process. A probe crash/failure/12-second timeout leaves the UI offline. After a
+successful probe, audio initializes on a worker thread. MainWindow and that
+worker share ownership of Engine; closing the window requests cancellation and
+never waits on a driver initialization lock. This preserves engine lifetime
+while a worker finishes. Windows audio initialization excludes the silent null
+backend, so a missing audio device is reported rather than presented as ready.
+
+Safe mode skips automatic audio initialization. Startup tests exercise both the
+normal and safe paths, and unit tests inject delayed/failed initialization and
+verify engine lifetime when its window owner releases it during initialization.

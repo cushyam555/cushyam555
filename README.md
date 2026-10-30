@@ -1,4 +1,4 @@
-# BT Karaoke Studio 0.1.0
+# BT Karaoke Studio 0.1.1
 
 โปรเจกต์ใหม่ที่เขียนขึ้นสำหรับ BT Karaoke โดยไม่ใช้ซอร์สหรือ BASS จาก HandyKaraoke
 เวอร์ชันเดิมเก็บใน branch `legacy-handykaraoke` และใช้ใบอนุญาตเดิมของตัวเอง
@@ -20,9 +20,9 @@
 
 ## เริ่มใช้งาน
 
-1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions/runs/41030169235)
-   เลือกรอบที่สำเร็จและ artifact `BT-Karaoke-Studio-0.1.0-Windows-x64`
-2. แตก ZIP เปิดตัวติดตั้ง `BTKaraoke-0.1.0-Windows-x64-setup.exe`
+1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions/workflows/windows.yml)
+   เลือกรอบที่สำเร็จและ artifact `BT-Karaoke-Studio-0.1.1-Windows-x64`
+2. แตก ZIP เปิดตัวติดตั้ง `BTKaraoke-0.1.1-Windows-x64-setup.exe`
 3. กด SoundFont เลือก `.sf2` ที่มีสิทธิ์ใช้ แล้ว Import เพลง `.mid` หรือ `.kar`
    สำหรับ NCN เลือก MIDI ในโฟลเดอร์ Song โดยมี Lyrics และ Cursor ในโครงสร้างเดียวกัน
 4. เพิ่มเพลงเข้าคิว เลือก Mixer & FX แล้วกด ＋ FX ของช่องที่ต้องการ
@@ -82,3 +82,16 @@ commit ที่ตรวจ: `2ffd246` ใช้ Qt 6.8.3 และ MSVC x64
 สคริปต์ `packaging/windows.ps1` ออกแบบสำหรับ GitHub Actions เป็นหลัก หากเรียกเอง
 ต้องกำหนด `QT_ROOT_DIR`, `VCToolsRedistDir` และ `RUNNER_TEMP` ให้เป็นโฟลเดอร์ที่มีอยู่
 และเขียนได้ พร้อมใช้ x64 Native Tools shell
+
+## แก้การเปิดแล้วไม่มีหน้าต่าง (0.1.1)
+
+- แสดงหน้าต่างก่อนตรวจอุปกรณ์เสียง
+- ตรวจไดรเวอร์เสียงใน subprocess พร้อม timeout แล้วเริ่ม audio engine เบื้องหลัง
+- หากเสียงเริ่มไม่ได้ หน้าต่างยังใช้ได้ และกด Audio เพื่อลองใหม่ได้
+- Start menu มี **BT Karaoke Studio - Safe Mode** สำหรับเปิดโดยไม่เริ่มเสียงอัตโนมัติ
+- มี native launcher ซึ่งไม่พึ่ง Qt และแจ้งรหัสข้อผิดพลาดเมื่อโปรแกรมเริ่มไม่ได้
+- ไฟล์ `BTKaraoke.exe` เป็น launcher; ตัวแอปคือ `BTKaraokeApp.exe` ต้องติดตั้งครบทั้งแพ็กเกจ
+- Log อยู่ที่ `%LOCALAPPDATA%\BTStudio\BTKaraoke\logs` (`launcher.log` และ `startup.log`)
+
+Windows CI ตรวจทั้งการเปิดแบบปกติที่ผ่านเส้นทางเริ่มระบบเสียง และ Safe Mode
+รวมถึงตรวจว่า launcher รายงานความล้มเหลวเมื่อ Qt DLL หาย ไม่ใช่เฉพาะการเปิดแบบออฟไลน์เดิม

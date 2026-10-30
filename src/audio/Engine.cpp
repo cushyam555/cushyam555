@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <thread>
 #define MA_NO_ENCODING
 #define MA_NO_DECODING
 #define MINIAUDIO_IMPLEMENTATION
@@ -16,6 +17,9 @@ namespace bt {
 struct Engine::Impl {
     ma_device device{};
     bool initialized = false;
+    std::mutex deviceMutex, errorMutex;
+    std::atomic<bool> closing{false};
+    QString lastAudioError;
     QString sfPath;
     tsf *base = nullptr;
     std::array<tsf *, PartCount> synth{};
@@ -100,6 +104,11 @@ Engine::~Engine() {
     stopAudio();
 }
 bool Engine::startAudio(QString &error) {
+    std::lock_guard<std::mutex> deviceLock(d->deviceMutex);
+    if (d->closing) {
+        error = "Audio startup was cancelled";
+        return false;
+    }
     if (d->initialized)
         return true;
     auto config = ma_device_config_init(ma_device_type_playback);
@@ -111,13 +120,23 @@ bool Engine::startAudio(QString &error) {
     config.dataCallback = [](ma_device *dev, void *out, const void *, ma_uint32 count) {
         static_cast<Engine *>(dev->pUserData)->render(static_cast<float *>(out), int(count));
     };
+#ifdef _WIN32
+    const ma_backend backends[] = {ma_backend_wasapi, ma_backend_dsound, ma_backend_winmm};
+    auto result = ma_device_init_ex(backends, 3, nullptr, &config, &d->device);
+#else
     auto result = ma_device_init(nullptr, &config, &d->device);
+#endif
     if (result != MA_SUCCESS) {
         error = QString("Audio output unavailable (%1). You can still edit and test offline.")
                     .arg(result);
         return false;
     }
     d->initialized = true;
+    if (d->closing) {
+        ma_device_uninit(&d->device);
+        d->initialized = false;
+        return false;
+    }
     if (ma_device_start(&d->device) != MA_SUCCESS) {
         ma_device_uninit(&d->device);
         d->initialized = false;
@@ -126,12 +145,56 @@ bool Engine::startAudio(QString &error) {
     }
     return true;
 }
+void Engine::startAudioAsync(std::function<bool(QString &)> initialize) {
+    auto state = audioState.load();
+    if (state == AudioState::Starting || state == AudioState::Ready)
+        return;
+    auto self = shared_from_this();
+    d->closing = false;
+    audioState = AudioState::Starting;
+    try {
+        std::thread([self, initialize = std::move(initialize)] {
+            QString error;
+            bool ready = false;
+            try {
+                ready = initialize ? initialize(error) : self->startAudio(error);
+            } catch (const std::exception &e) {
+                error = QString::fromUtf8(e.what());
+            }
+            {
+                std::lock_guard<std::mutex> lock(self->d->errorMutex);
+                self->d->lastAudioError = error;
+            }
+            self->audioState = self->d->closing ? AudioState::Offline
+                               : ready          ? AudioState::Ready
+                                                : AudioState::Failed;
+            // Keep the engine alive until initialization finishes, even if its window closed.
+        }).detach();
+    } catch (const std::exception &e) {
+        {
+            std::lock_guard<std::mutex> lock(d->errorMutex);
+            d->lastAudioError = QString::fromUtf8(e.what());
+        }
+        audioState = AudioState::Failed;
+    }
+}
+QString Engine::audioError() const {
+    std::lock_guard<std::mutex> lock(d->errorMutex);
+    return d->lastAudioError;
+}
 void Engine::stopAudio() {
+    d->closing = true;
+    // A driver may be stuck in initialization. Closing the UI must not wait for it.
+    std::unique_lock<std::mutex> lock(d->deviceMutex, std::try_to_lock);
+    if (!lock.owns_lock())
+        return;
     if (d->initialized) {
         ma_device_uninit(&d->device);
         d->initialized = false;
     }
+    audioState = AudioState::Offline;
 }
+
 void Engine::loadSoundfont(const QString &path) {
     QFile file(path);
     if (!file.open(QFile::ReadOnly) || file.size() > 0x7fffffff)

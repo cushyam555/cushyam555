@@ -9,9 +9,15 @@ class QProgressBar;
 class QSlider;
 class QStackedWidget;
 class QLineEdit;
+class QProcess;
 namespace bt {
 class MainWindow final : public QMainWindow {
-    Engine engine;
+    std::shared_ptr<Engine> engineOwner = std::make_shared<Engine>();
+    Engine &engine = *engineOwner;
+    Engine::AudioState lastAudioState = Engine::AudioState::Offline;
+    bool audioAttempted = false;
+    QProcess *audioProbe = nullptr;
+    void enableAudio();
     QVector<Song> library;
     QJsonArray plugins;
     int selected = 15;
@@ -48,6 +54,7 @@ class MainWindow final : public QMainWindow {
     explicit MainWindow(bool offline = false);
     ~MainWindow() override;
     bool smokeReady() const;
+    bool startupSettled() const;
     void selectPage(int index);
 };
 QString theme();

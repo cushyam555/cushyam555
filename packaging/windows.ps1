@@ -9,8 +9,8 @@ Run 'cmake' @('-S', '.', '-B', 'build', '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Relea
 Run 'cmake' @('--build', 'build', '--target', 'BTKaraoke', 'bt_tests', '--parallel', '3')
 Run 'ctest' @('--test-dir', 'build', '--output-on-failure')
 New-Item -ItemType Directory -Force dist | Out-Null
-Copy-Item build/BTKaraoke.exe dist -Force
-Run 'windeployqt' @('--release','--compiler-runtime','--no-translations','dist/BTKaraoke.exe')
+Copy-Item build/BTKaraoke.exe,build/BTKaraokeApp.exe dist -Force
+Run 'windeployqt' @('--release','--compiler-runtime','--no-translations','dist/BTKaraokeApp.exe')
 $crt = @(Get-ChildItem "$env:VCToolsRedistDir/x64/Microsoft.VC*.CRT/*.dll" -File)
 if (-not $crt.Count) { throw 'MSVC runtime not found' }
 $crt | Copy-Item -Destination dist -Force
@@ -22,10 +22,10 @@ Copy-Item build/licenses dist/dependency-licenses -Recurse -Force
 Prefix=.
 Plugins=.
 '@ | Set-Content dist/qt.conf -Encoding ascii
-function CheckApp([string]$path) {
+function CheckApp([string]$path, [string]$mode = '--smoke-test') {
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $path
-    $info.Arguments = '--smoke-test'
+    $info.Arguments = $mode
     $info.UseShellExecute = $false
     $info.WorkingDirectory = $env:RUNNER_TEMP
     $info.RedirectStandardOutput = $true
@@ -40,15 +40,27 @@ function CheckApp([string]$path) {
     if (-not $p.WaitForExit(30000)) { $p.Kill(); throw 'UI smoke test timeout' }
     $text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
     Write-Host $text
-    if ($p.ExitCode -ne 0 -or $text -notmatch 'BT_UI_SMOKE PASS') { throw "UI smoke failed: $($p.ExitCode)" }
+    $marker = if ($mode -eq '--startup-test') { 'BT_STARTUP_VISIBLE PASS' } else { 'BT_UI_SMOKE PASS' }
+    if ($p.ExitCode -ne 0 -or $text -notmatch $marker) { throw "Application startup failed: $($p.ExitCode)" }
 }
 CheckApp (Join-Path $root 'dist/BTKaraoke.exe')
+CheckApp (Join-Path $root 'dist/BTKaraoke.exe') '--startup-test'
+# The static native launcher must report a missing Qt runtime instead of disappearing.
+Rename-Item dist/Qt6Core.dll Qt6Core.dll.unavailable
+try {
+    $missing = Start-Process (Join-Path $root 'dist/BTKaraoke.exe') -ArgumentList '--smoke-test' -Wait -PassThru
+    if ($missing.ExitCode -eq 0) { throw 'Launcher did not detect the missing Qt runtime' }
+} finally { Rename-Item dist/Qt6Core.dll.unavailable Qt6Core.dll }
+
 Run "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" @('packaging/bt.iss')
-$setup = Get-ChildItem installer-output/*setup.exe | Select-Object -First 1
+$setup = Get-Item installer-output/BTKaraoke-0.1.1-Windows-x64-setup.exe
 $install = Join-Path $env:RUNNER_TEMP ('BT-Studio-' + [guid]::NewGuid().ToString('N'))
 $p = Start-Process $setup.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$install`"") -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw 'Installer failed' }
-try { CheckApp (Join-Path $install 'BTKaraoke.exe') }
+try {
+    CheckApp (Join-Path $install 'BTKaraoke.exe')
+    CheckApp (Join-Path $install 'BTKaraoke.exe') '--startup-test'
+}
 finally {
     $p = Start-Process (Join-Path $install 'unins000.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait -PassThru
     if ($p.ExitCode -ne 0) { throw 'Uninstaller failed' }

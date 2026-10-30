@@ -6,7 +6,7 @@
 #include <functional>
 #include <mutex>
 namespace bt {
-class Engine {
+class Engine : public std::enable_shared_from_this<Engine> {
     struct Impl;
     std::unique_ptr<Impl> d;
 
@@ -27,7 +27,11 @@ class Engine {
     Song song;
     Engine();
     ~Engine();
+    enum class AudioState { Offline, Starting, Ready, Failed };
+    std::atomic<AudioState> audioState{AudioState::Offline};
     bool startAudio(QString &error);
+    void startAudioAsync(std::function<bool(QString &)> initialize = {});
+    QString audioError() const;
     void stopAudio();
     void loadSoundfont(const QString &path);
     QString soundfontPath() const;
