@@ -133,29 +133,81 @@ class CoreTests : public QObject {
         QVERIFY(engine.peaks[0] > 0);
         QCOMPARE(engine.peaks[15].load(), 0.f);
     }
+    void hiHatChoke() {
+        bt::Engine engine;
+        engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
+        engine.strips[17].mute = true;
+        bt::Song song;
+        song.duration = 2;
+        song.events = {{0, 0, 0x99, 46, 110}, {.02, 20, 0x99, 42, 110}};
+        engine.load(song);
+        engine.play();
+        float b[1024];
+        engine.render(b, 512);
+        bool audible = false;
+        for (float sample : b)
+            audible |= std::abs(sample) > .00001f;
+        QVERIFY(audible);
+        engine.render(b, 512);
+        for (int i = 992; i < 1024; ++i)
+            QVERIFY(std::abs(b[i]) < .00001f);
+    }
+    void pauseResume() {
+        bt::Engine engine;
+        engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
+        bt::Song song;
+        song.duration = 2;
+        song.events = {{0, 0, 0x90, 60, 110}, {1, 480, 0x80, 60, 0}};
+        engine.load(song);
+        engine.play();
+        float b[512];
+        engine.render(b, 256);
+        engine.pause();
+        double paused = engine.position.load();
+        engine.render(b, 256);
+        for (float sample : b)
+            QCOMPARE(sample, 0.f);
+        QCOMPARE(engine.position.load(), paused);
+        engine.play();
+        engine.render(b, 256);
+        bool audible = false;
+        for (float sample : b)
+            audible |= std::abs(sample) > .00001f;
+        QVERIFY(audible);
+        QVERIFY(engine.position.load() > paused);
+    }
     void realVst() {
         auto path = qEnvironmentVariable("BT_TEST_VST3");
-        if (path.isEmpty())
-            QSKIP("Set BT_TEST_VST3 to the built integration plugin");
-        auto list = bt::scanVst3(path);
-        QVERIFY(!list.isEmpty());
-        auto info = list.first().toObject();
-        auto fx = std::make_shared<bt::VstEffect>(path, info["id"].toString(), 48000);
-        float samples[128];
-        std::fill_n(samples, 128, .5f);
-        std::vector<bt::MidiEvent> no;
-        fx->process(samples, 64, no, 120, 0);
-        QVERIFY(std::abs(samples[0] - .25f) < .01f);
-        fx->setParameter(0, .25);
-        std::fill_n(samples, 128, .5f);
-        fx->process(samples, 64, no, 120, 0);
-        QVERIFY(std::abs(samples[0] - .125f) < .01f);
-        auto state = fx->save();
-        auto restored = std::make_shared<bt::VstEffect>(path, info["id"].toString(), 48000);
-        restored->restore(state);
-        std::fill_n(samples, 128, .5f);
-        restored->process(samples, 64, no, 120, 0);
-        QVERIFY(std::abs(samples[0] - .125f) < .01f);
+        QVERIFY2(!path.isEmpty(), "BT_TEST_VST3 must identify the integration module");
+        QVERIFY2(QFileInfo::exists(path), qPrintable(path));
+        try {
+            auto list = bt::scanVst3(path);
+            QVERIFY(!list.isEmpty());
+            auto info = list.first().toObject();
+            auto fx = std::make_shared<bt::VstEffect>(path, info["id"].toString(), 48000);
+            float samples[128];
+            std::fill_n(samples, 128, .5f);
+            std::vector<bt::MidiEvent> no;
+            fx->process(samples, 64, no, 120, 0);
+            QVERIFY(std::abs(samples[0] - .25f) < .01f);
+            fx->setParameter(0, .25);
+            std::fill_n(samples, 128, .5f);
+            fx->process(samples, 64, no, 120, 0);
+            QVERIFY(std::abs(samples[0] - .125f) < .01f);
+            fx->bypass = true;
+            std::fill_n(samples, 128, .5f);
+            fx->process(samples, 64, no, 120, 0);
+            QVERIFY(std::abs(samples[0] - .5f) < .001f);
+            fx->bypass = false;
+            auto state = fx->save();
+            auto restored = std::make_shared<bt::VstEffect>(path, info["id"].toString(), 48000);
+            restored->restore(state);
+            std::fill_n(samples, 128, .5f);
+            restored->process(samples, 64, no, 120, 0);
+            QVERIFY(std::abs(samples[0] - .125f) < .01f);
+        } catch (const std::exception &e) {
+            QFAIL(e.what());
+        }
     }
 };
 QTEST_MAIN(CoreTests)

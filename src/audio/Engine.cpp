@@ -31,6 +31,7 @@ struct Engine::Impl {
     };
     std::vector<Audition> auditions;
     double wall = 0;
+    bool suspended = false;
     Impl() {
         for (auto &p : pending)
             p.reserve(256);
@@ -76,6 +77,12 @@ struct Engine::Impl {
     }
     void event(const MidiEvent &e) {
         int channel = e.status & 15, kind = e.status & 240;
+        // Splitting drum voices must preserve the normal closed/open hi-hat choke.
+        if (channel == 9 && kind == 0x90 && e.data2 && (e.data1 == 42 || e.data1 == 44)) {
+            send(18, {e.time, e.tick, 0x80, 46, 0});
+            if (synth[18])
+                tsf_channel_sounds_off_all(synth[18], 0);
+        }
         if (channel == 9 && kind != 0x80 && kind != 0x90) {
             for (int p = 15; p < PartCount; ++p)
                 send(p, e);
@@ -172,6 +179,7 @@ QString Engine::soundfontPath() const {
 void Engine::load(const Song &s) {
     std::lock_guard<std::mutex> lock(mutex);
     playing = false;
+    d->suspended = false;
     d->panic();
     song = s;
     position = 0;
@@ -181,19 +189,22 @@ void Engine::load(const Song &s) {
             fx->reset();
 }
 void Engine::play() {
+    std::lock_guard<std::mutex> lock(mutex);
+    d->suspended = false;
     playing = true;
 }
 void Engine::pause() {
     std::lock_guard<std::mutex> lock(mutex);
     playing = false;
-    d->panic();
+    d->suspended = true;
 }
 void Engine::stop() {
-    seek(0);
     playing = false;
+    seek(0);
 }
 void Engine::seek(double seconds) {
     std::lock_guard<std::mutex> lock(mutex);
+    d->suspended = false;
     d->panic();
     position = std::clamp(seconds, 0., song.duration);
     d->cursor = 0;
@@ -220,6 +231,10 @@ void Engine::testNote(int part, int note) {
     std::lock_guard<std::mutex> lock(mutex);
     if (part < 0 || part >= PartCount)
         return;
+    if (d->suspended) {
+        d->panic();
+        d->suspended = false;
+    }
     int n = part == 15   ? 36
             : part == 16 ? 38
             : part == 17 ? 42
@@ -238,6 +253,10 @@ void Engine::render(float *out, int frames) {
     std::unique_lock<std::mutex> lock(mutex, std::try_to_lock);
     if (!lock.owns_lock()) {
         ++droppedBlocks;
+        return;
+    }
+    if (d->suspended) {
+        cpu = 0;
         return;
     }
     int done = 0;
