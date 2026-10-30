@@ -29,6 +29,8 @@ foreach ($library in @('bass24', 'bassmidi24', 'bass_fx24', 'bassmix24', 'bass_v
 Copy-Item "$root/3rdParty/WinSparkle/x64/WinSparkle.dll" $stage -Force
 Copy-Item "$root/3rdParty/VSTChecker_Qt_5_12_5_MSVC2017/VSTChecker_x64.exe" $stage -Force
 Copy-Item "$root/Style.ini", "$root/LICENSE", "$root/UPSTREAM.md" $stage -Force
+New-Item -ItemType Directory -Force (Join-Path $stage 'languages') | Out-Null
+Copy-Item "$root/languages/en.qm" (Join-Path $stage 'languages') -Force
 # Keep all upstream notices, including the helper and WinSparkle licenses.
 $notices = Join-Path $stage 'third-party-notices'
 New-Item -ItemType Directory -Force $notices | Out-Null
@@ -42,9 +44,19 @@ foreach ($tree in @('BASS', '3rdParty')) {
             Copy-Item $_.FullName $destination -Force
         }
 }
+@'
+[Paths]
+Prefix=.
+Plugins=.
+'@ | Set-Content -Path (Join-Path $stage 'qt.conf') -Encoding ascii
 Push-Location $stage
 try { Invoke-Checked 'windeployqt' @('--release', '--compiler-runtime', '--no-translations', 'HandyKaraoke.exe') }
 finally { Pop-Location }
+# Deploy the MSVC CRT app-locally so end users do not need Visual Studio.
+if (-not $env:VCToolsRedistDir) { throw 'VCToolsRedistDir is missing; use an x64 Native Tools shell.' }
+$crtFiles = @(Get-ChildItem "$env:VCToolsRedistDir/x64/Microsoft.VC*.CRT/*.dll" -File)
+if ($crtFiles.Count -eq 0) { throw 'Microsoft x64 CRT redistributable DLLs not found.' }
+$crtFiles | Copy-Item -Destination $stage -Force
 # Run integration tests against the same x64 BASS binaries we ship.
 Push-Location $testBuild
 try {
@@ -63,7 +75,7 @@ $info.WorkingDirectory = $stage
 $info.UseShellExecute = $false
 $info.RedirectStandardOutput = $true
 $info.RedirectStandardError = $true
-$info.Environment['QT_FORCE_STDERR_LOGGING'] = '1'
+$info.EnvironmentVariables['QT_FORCE_STDERR_LOGGING'] = '1'
 $process = [System.Diagnostics.Process]::Start($info)
 $stdout = $process.StandardOutput.ReadToEndAsync()
 $stderr = $process.StandardError.ReadToEndAsync()

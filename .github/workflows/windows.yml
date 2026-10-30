@@ -54,6 +54,16 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/bt-x64.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-FileHash installer-output/*.exe -Algorithm SHA256 | Format-List | Out-File installer-output/SHA256.txt
+      - name: Test installed package
+        shell: pwsh
+        run: |
+          try {
+            ./packaging/test-windows-installer.ps1
+          } catch {
+            $message = ($_ | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=BT Karaoke installer diagnostics::$message"
+            exit 1
+          }
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
