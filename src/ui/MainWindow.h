@@ -1,5 +1,8 @@
 #pragma once
+#include "Appearance.h"
 #include "audio/Engine.h"
+#include "core/SongLibrary.h"
+#include <QHash>
 #include <QJsonArray>
 #include <QMainWindow>
 class QListWidget;
@@ -22,8 +25,13 @@ class MainWindow final : public QMainWindow {
     QProcess *audioProbe = nullptr;
     void enableAudio();
     QVector<Song> library;
+    QHash<QString, int> libraryMap;
     QJsonArray plugins;
-    int selected = 15;
+    int selected = 0;
+    std::unique_ptr<SongLibrary> songStore;
+    QString storageRoot;
+    QStringList ncnRoots;
+    LyricsStyle lyricStyle;
     bool refreshing = false;
     QString projectPath;
     QListWidget *songs = nullptr, *queue = nullptr, *chain = nullptr, *pluginList = nullptr;
@@ -32,21 +40,28 @@ class MainWindow final : public QMainWindow {
     QSlider *seek = nullptr;
     QStackedWidget *pages = nullptr;
     QWidget *stage = nullptr;
-    std::array<QProgressBar *, TrackCount> meters{};
-    std::array<QPushButton *, TrackCount> selectButtons{}, muteButtons{}, soloButtons{};
-    std::array<QSlider *, TrackCount> volumeControls{}, panControls{};
+    std::vector<QProgressBar *> meters;
+    std::vector<QPushButton *> selectButtons, muteButtons, soloButtons;
+    std::vector<QSlider *> volumeControls, panControls;
     bool wasPlaying = false;
     std::array<QComboBox *, PartCount> routeControls{};
     std::array<QSlider *, PartCount> sendControls{};
-    std::array<QLabel *, TrackCount> fxSummaries{};
+    std::vector<QLabel *> fxSummaries;
     QCheckBox *melodyMute = nullptr;
     QSpinBox *melodyChannelControl = nullptr;
     void importSongs();
     void importPaths(const QStringList &paths);
     void importFolder();
+    void manageNcn();
+    void scanNcn(const QString &root, bool copy);
+    void reloadLibrary();
+    bool rememberSong(Song song);
+    void rebuildMixer();
+    void lyricsSettings();
+    void savePreferences();
     void midiSettings();
     void refreshLibrary(const QString &filter = {});
-    void loadRow(int);
+    bool loadRow(int);
     void next();
     void mixerPage(QWidget *);
     void rebuildChain();
@@ -65,8 +80,10 @@ class MainWindow final : public QMainWindow {
     explicit MainWindow(bool offline = false);
     ~MainWindow() override;
     bool smokeReady() const;
+    bool verifyMixerUi();
     bool startupSettled() const;
     void selectPage(int index);
+    void previewSettings();
 };
 QString theme();
 } // namespace bt

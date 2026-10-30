@@ -11,6 +11,7 @@ Run 'ctest' @('--test-dir', 'build', '--output-on-failure')
 New-Item -ItemType Directory -Force dist | Out-Null
 Copy-Item build/BTKaraoke.exe,build/BTKaraokeApp.exe dist -Force
 Run 'windeployqt' @('--release','--compiler-runtime','--no-translations','dist/BTKaraokeApp.exe')
+if (-not (Test-Path dist/sqldrivers/qsqlite.dll)) { throw 'SQLite driver was not deployed' }
 $crt = @(Get-ChildItem "$env:VCToolsRedistDir/x64/Microsoft.VC*.CRT/*.dll" -File)
 if (-not $crt.Count) { throw 'MSVC runtime not found' }
 $crt | Copy-Item -Destination dist -Force
@@ -56,7 +57,7 @@ try {
 } finally { Rename-Item dist/Qt6Core.dll.unavailable Qt6Core.dll }
 
 Run "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" @('packaging/bt.iss')
-$setup = Get-Item installer-output/BTKaraoke-0.2.0-Windows-x64-setup.exe
+$setup = Get-Item installer-output/BTKaraoke-0.3.0-Windows-x64-setup.exe
 $install = Join-Path $env:RUNNER_TEMP ('BT-Studio-' + [guid]::NewGuid().ToString('N'))
 $p = Start-Process $setup.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$install`"") -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw 'Installer failed' }

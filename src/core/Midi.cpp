@@ -76,6 +76,20 @@ struct Raw {
     QString lyric;
 };
 } // namespace
+QString ncnSongFolder(const QString &root) {
+    return existingPath(QDir(root).filePath("Song"));
+}
+NcnFiles ncnFiles(const QString &path) {
+    QFileInfo info(path);
+    auto full = QDir::fromNativeSeparators(info.absoluteFilePath());
+    int pos = full.lastIndexOf("/Song/", -1, Qt::CaseInsensitive);
+    if (pos < 0)
+        return {};
+    QString root = full.left(pos), relative = full.mid(pos + 6);
+    QString base = relative.left(relative.size() - info.suffix().size() - 1);
+    return {info.absoluteFilePath(), existingPath(root + "/Lyrics/" + base + ".lyr"),
+            existingPath(root + "/Cursor/" + base + ".cur"), relative};
+}
 Song readSong(const QString &input) {
     QString path = input;
     auto info = QFileInfo(path);
@@ -168,6 +182,7 @@ Song readSong(const QString &input) {
         return std::tie(a.tick, a.order) < std::tie(b.tick, b.order);
     });
     Song song;
+    song.id = QFileInfo(path).completeBaseName();
     song.path = QFileInfo(path).absoluteFilePath();
     song.title = QFileInfo(path).completeBaseName();
     song.division = division;
@@ -207,6 +222,7 @@ Song readSong(const QString &input) {
             if (lines.size() >= 4) {
                 song.title = lines[0].trimmed();
                 song.artist = lines[1].trimmed();
+                song.key = lines[2].trimmed();
                 QString text = lines.mid(4).join("\n");
                 auto curs = c.readAll();
                 song.lyrics.clear();
@@ -238,11 +254,11 @@ Song readSong(const QString &input) {
 }
 int drumNote(int part) {
     static const int first[] = {36, 38, 42, 46, 45, 49, 39, 60};
-    if (part < 15 || part >= PartCount)
+    if (part < DrumFirst || part >= PartCount)
         return 60;
-    if (part < 23)
-        return first[part - 15];
-    int index = 23;
+    if (part < DrumFirst + 8)
+        return first[part - DrumFirst];
+    int index = DrumFirst + 8;
     for (int note = 35; note <= 81; ++note) {
         if (std::find(std::begin(first), std::end(first), note) != std::end(first))
             continue;
@@ -253,18 +269,19 @@ int drumNote(int part) {
 }
 int partFor(int channel, int note) {
     if (channel != 9)
-        return channel < 9 ? channel : channel - 1;
-    for (int p = 15; p < PartCount; ++p)
+        return channel < 9 ? channel
+                           : channel - 1; // legacy channel mapping; engine routes melodic programs
+    for (int p = DrumFirst; p < PartCount; ++p)
         if (drumNote(p) == note)
             return p;
-    return 22;
+    return DrumFirst + 7;
 }
 QString partName(int p) {
     if (p == MasterPart)
         return "MASTER";
-    if (p >= BusFirst && p < TrackCount)
-        return QString("Bus %1").arg(QChar('A' + p - BusFirst));
-    if (p >= 15) {
+    if (p >= BusFirst)
+        return QString("Bus %1").arg(p - BusFirst + 1);
+    if (p >= DrumFirst) {
         static const char *names[] = {"Acoustic bass drum",
                                       "Kick",
                                       "Side stick",
@@ -314,6 +331,11 @@ QString partName(int p) {
                                       "Open triangle"};
         return QString("%1 • %2").arg(names[drumNote(p) - 35]).arg(drumNote(p));
     }
-    return QString("Instrument %1 • MIDI %2").arg(p + 1).arg(p < 9 ? p + 1 : p + 2);
+    return QString("%1 • Program %2")
+        .arg(QStringList{"Piano", "Chromatic percussion", "Organ", "Guitar", "Bass", "Strings",
+                         "Ensemble", "Brass", "Reed", "Pipe", "Synth lead", "Synth pad",
+                         "Synth effects", "Ethnic", "Percussive", "Sound effects"}
+                 .at(p / 8))
+        .arg(p + 1);
 }
 } // namespace bt

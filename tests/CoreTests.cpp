@@ -1,6 +1,8 @@
 #include "audio/Engine.h"
 #include "core/Midi.h"
+#include "core/SongLibrary.h"
 #include "plugins/VstEffect.h"
+#include "ui/Appearance.h"
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -27,6 +29,14 @@ class TestSignal : public bt::Effect {
     void setParameter(int, double) override {}
     QJsonObject save() const override {
         return {};
+    }
+};
+class MidiRecorder : public TestSignal {
+  public:
+    std::vector<bt::MidiEvent> received;
+    MidiRecorder() : TestSignal(0, false) {}
+    void process(float *, int, const std::vector<bt::MidiEvent> &events, double, double) override {
+        received.insert(received.end(), events.begin(), events.end());
     }
 };
 class CoreTests : public QObject {
@@ -87,9 +97,9 @@ class CoreTests : public QObject {
         QVERIFY_EXCEPTION_THROWN(bt::readSong(f.fileName()), std::runtime_error);
     }
     void drumIsolation() {
-        QCOMPARE(bt::partFor(9, 36), 15);
-        QCOMPARE(bt::partFor(9, 38), 16);
-        QCOMPARE(bt::partFor(9, 42), 17);
+        QCOMPARE(bt::partFor(9, 36), bt::DrumFirst);
+        QCOMPARE(bt::partFor(9, 38), bt::DrumFirst + 1);
+        QCOMPARE(bt::partFor(9, 42), bt::DrumFirst + 2);
         QVERIFY(bt::partFor(9, 46) != bt::partFor(9, 42));
         QCOMPARE(bt::partFor(0, 36), 0);
     }
@@ -111,7 +121,7 @@ class CoreTests : public QObject {
         QSet<int> parts;
         for (int note = 35; note <= 81; ++note) {
             int part = bt::partFor(9, note);
-            QVERIFY(part >= 15 && part < bt::PartCount);
+            QVERIFY(part >= bt::DrumFirst && part < bt::PartCount);
             QCOMPARE(bt::drumNote(part), note);
             QVERIFY(!parts.contains(part));
             parts.insert(part);
@@ -188,11 +198,137 @@ class CoreTests : public QObject {
         for (int i = 0; i < 24; ++i)
             tracks.append(QJsonObject{{"volume", i == 23 ? .42 : .7}, {"mute", i == 19}});
         bt::Engine engine;
-        QVERIFY(engine.restore(QJsonObject{{"schema", 1}, {"tracks", tracks}}).isEmpty());
+        QVERIFY(!engine.restore(QJsonObject{{"schema", 1}, {"tracks", tracks}}).isEmpty());
         QCOMPARE(engine.strips[bt::MasterPart].volume, .42);
         QVERIFY(engine.strips[bt::partFor(9, 48)].mute);
         QCOMPARE(engine.strips[bt::BusFirst].volume, 1.);
         QCOMPARE(engine.strips[0].output, bt::MasterPart);
+    }
+    void programRoutingSurvivesProgramChanges() {
+        bt::Engine engine;
+        auto strings = std::make_shared<MidiRecorder>(), guitar = std::make_shared<MidiRecorder>(),
+             channelTwo = std::make_shared<MidiRecorder>();
+        engine.strips[40].fx.push_back(strings);
+        engine.strips[24].fx.push_back(guitar);
+        engine.strips[2].fx.push_back(channelTwo);
+        bt::Song song;
+        song.duration = 1;
+        song.events = {{0, 0, 0xc2, 40, 0},   {0, 0, 0xc7, 40, 0},   {0, 0, 0x92, 60, 100},
+                       {0, 0, 0x97, 64, 100}, {.01, 0, 0xc2, 24, 0}, {.01, 0, 0x92, 60, 100},
+                       {.02, 0, 0x82, 60, 0}, {.03, 0, 0x82, 60, 0}, {.04, 0, 0x87, 64, 0}};
+        engine.load(song);
+        engine.play();
+        std::vector<float> pcm(4800);
+        engine.render(pcm.data(), 2400);
+        auto notes = [](const std::vector<bt::MidiEvent> &events) {
+            QVector<int> result;
+            for (const auto &e : events)
+                if ((e.status & 240) == 0x90 || (e.status & 240) == 0x80)
+                    result << ((e.status << 8) | e.data1);
+            return result;
+        };
+        QCOMPARE(notes(strings->received), QVector<int>({(0x92 << 8) | 60, (0x97 << 8) | 64,
+                                                         (0x82 << 8) | 60, (0x87 << 8) | 64}));
+        QCOMPARE(notes(guitar->received), QVector<int>({(0x92 << 8) | 60, (0x82 << 8) | 60}));
+        QVERIFY(notes(channelTwo->received).isEmpty());
+        engine.seek(0);
+        strings->received.clear();
+        guitar->received.clear();
+        engine.play();
+        engine.render(pcm.data(), 2400);
+        QCOMPARE(notes(strings->received).size(), 4);
+    }
+    void dynamicBusesAndSoundfontNames() {
+        bt::Engine engine;
+        QCOMPARE(engine.trackCount() - bt::BusFirst, 5);
+        int last = 0;
+        for (int i = 0; i < 7; ++i)
+            last = engine.addBus();
+        QCOMPARE(engine.trackCount() - bt::BusFirst, 12);
+        QVERIFY(engine.setRoute(127, last));
+        engine.strips[last].name = "Strings group";
+        for (int i = 0; i < 128; ++i)
+            engine.strips[last].fx.push_back(bt::builtin("Gain", 48000));
+        auto state = engine.save();
+        bt::Engine loaded;
+        QVERIFY(loaded.restore(state).isEmpty());
+        QCOMPARE(loaded.trackCount(), engine.trackCount());
+        QCOMPARE(loaded.strips[127].output, last);
+        QCOMPARE(loaded.strips[last].fx.size(), size_t(128));
+        QCOMPARE(loaded.strips[last].name, QString("Strings group"));
+        engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
+        QCOMPARE(engine.presetNames().size(), 128);
+        QVERIFY(engine.strips[0].name.contains("BT Test"));
+        QVERIFY(engine.strips[127].name.contains("Not present"));
+        engine.testNote(127);
+        float pcm[512];
+        engine.render(pcm, 256);
+        // Missing bank-0 programs do not silently play a different SoundFont preset.
+        for (auto value : pcm)
+            QVERIFY(std::abs(value) < .00001f);
+    }
+    void managedNcnStorageAndPersistentIndex() {
+        QTemporaryDir source, managed;
+        for (const auto &dir : {"Song/set", "Lyrics/set", "Cursor/set"})
+            QVERIFY(QDir().mkpath(source.path() + "/" + dir));
+        auto write = [](const QString &path, const QByteArray &bytes) {
+            QFile f(path);
+            return f.open(QFile::WriteOnly) && f.write(bytes) == bytes.size();
+        };
+        auto mid = source.path() + "/Song/set/001.mid";
+        QVERIFY(write(mid, midi()));
+        QVERIFY(write(source.path() + "/Lyrics/set/001.lyr", "My song\nArtist\nC\n\nAB"));
+        QVERIFY(write(source.path() + "/Cursor/set/001.cur", QByteArray::fromHex("00001800")));
+        auto stored = bt::SongLibrary::copyNcn(mid, managed.path() + "/NCN");
+        QCOMPARE(bt::SongLibrary::copyNcn(mid, managed.path() + "/NCN"), stored);
+        QVERIFY(write(source.path() + "/Lyrics/set/001.lyr", "Changed\nArtist\nC\n\nAB"));
+        QVERIFY_EXCEPTION_THROWN(bt::SongLibrary::copyNcn(mid, managed.path() + "/NCN"),
+                                 std::runtime_error);
+        QCOMPARE(bt::readSong(stored).title, QString("My song"));
+        auto db = managed.path() + "/library.sqlite";
+        {
+            bt::SongLibrary library(db);
+            auto song = bt::readSong(stored);
+            library.put(song);
+            library.put(song);
+            QCOMPARE(library.entries().size(), 1);
+        }
+        QVERIFY(QDir(source.path()).removeRecursively());
+        {
+            bt::SongLibrary library(db);
+            auto entries = library.entries();
+            QCOMPARE(entries.size(), 1);
+            QCOMPARE(entries[0].id, QString("001"));
+            QCOMPARE(entries[0].title, QString("My song"));
+            QCOMPARE(entries[0].key, QString("C"));
+            QVERIFY(entries[0].events.isEmpty());
+            QCOMPARE(bt::readSong(entries[0].path).lyrics.size(), 2);
+            QVERIFY(QFile::remove(stored));
+            library.removeMissing();
+            QVERIFY(library.entries().isEmpty());
+        }
+    }
+    void lyricStyleAndDarkPalette() {
+        bt::LyricsStyle style;
+        style.font = QFont("Tahoma", 62, QFont::Bold);
+        style.background = QColor("#112233");
+        style.sung = QColor("#ffcc00");
+        style.text = QColor("#ffffff");
+        style.offset = .7;
+        style.alignment = 2;
+        bt::LyricsStyle loaded;
+        loaded.restore(style.save());
+        QCOMPARE(loaded.font.pointSize(), 62);
+        QCOMPARE(loaded.background, style.background);
+        QCOMPARE(loaded.sung, style.sung);
+        QCOMPARE(loaded.text, style.text);
+        QCOMPARE(loaded.offset, .7);
+        QCOMPARE(loaded.alignment, 2);
+        bt::applyDarkPalette(*qobject_cast<QApplication *>(QCoreApplication::instance()));
+        auto palette = QApplication::palette();
+        QVERIFY(palette.color(QPalette::Window).lightnessF() < .2);
+        QVERIFY(palette.color(QPalette::Text).lightnessF() > .7);
+        QVERIFY(palette.color(QPalette::Base).lightnessF() < .2);
     }
     void arbitraryChains() {
         bt::Engine engine;
@@ -263,7 +399,7 @@ class CoreTests : public QObject {
     void hiHatChoke() {
         bt::Engine engine;
         engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
-        engine.strips[17].mute = true;
+        engine.strips[bt::partFor(9, 42)].mute = true;
         bt::Song song;
         song.duration = 2;
         song.events = {{0, 0, 0x99, 46, 110}, {.02, 20, 0x99, 42, 110}};

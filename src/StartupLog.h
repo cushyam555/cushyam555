@@ -41,6 +41,6 @@ inline void installStartupLog() {
     qInstallMessageHandler([](QtMsgType type, const QMessageLogContext &, const QString &message) {
         startupLog((type == QtFatalMsg ? "FATAL: " : "") + message);
     });
-    startupLog("BT Karaoke 0.1.1 process starting");
+    startupLog("BT Karaoke process starting");
 }
 } // namespace bt

@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <array>
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <mutex>
 namespace bt {
@@ -22,8 +23,8 @@ class Engine : public std::enable_shared_from_this<Engine> {
         std::vector<std::shared_ptr<Effect>> fx;
     };
     mutable std::mutex mutex;
-    std::array<Strip, TrackCount> strips;
-    std::array<std::atomic<float>, TrackCount> peaks{};
+    std::vector<Strip> strips;
+    std::deque<std::atomic<float>> peaks;
     std::atomic<double> position{0}, cpu{0};
     std::atomic<bool> playing{false};
     std::atomic<int> droppedBlocks{0};
@@ -39,6 +40,11 @@ class Engine : public std::enable_shared_from_this<Engine> {
     void setMute(int part, bool mute);
     void setSolo(int part, bool solo);
     bool setRoute(int part, int output);
+    int addBus();
+    int trackCount() const {
+        return int(strips.size());
+    }
+    QStringList presetNames() const;
     Engine();
     ~Engine();
     enum class AudioState { Offline, Starting, Ready, Failed };

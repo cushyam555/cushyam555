@@ -163,7 +163,7 @@ struct VstEffect::Impl {
     std::array<float, 1024> dry{};
     HostProcessData data;
     ProcessContext context{};
-    EventList events{256};
+    EventList events{4096};
     ParameterChanges changes{1024}, outputs{1024};
     std::vector<ParameterInfo> info;
     std::vector<double> pending;
@@ -307,13 +307,13 @@ void VstEffect::process(float *b, int frames, const std::vector<MidiEvent> &midi
         e.ppqPosition = position * bpm / 60.;
         if (kind == 0x90 && m.data2) {
             e.type = Event::kNoteOnEvent;
-            e.noteOn.channel = 0;
+            e.noteOn.channel = int16(m.status & 15);
             e.noteOn.pitch = int16(m.data1);
             e.noteOn.velocity = m.data2 / 127.f;
             e.noteOn.noteId = -1;
         } else {
             e.type = Event::kNoteOffEvent;
-            e.noteOff.channel = 0;
+            e.noteOff.channel = int16(m.status & 15);
             e.noteOff.pitch = int16(m.data1);
             e.noteOff.velocity = 0;
             e.noteOff.noteId = -1;

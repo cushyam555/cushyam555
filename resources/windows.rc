@@ -1,7 +1,7 @@
 IDI_ICON1 ICON "bt.ico"
 1 VERSIONINFO
-FILEVERSION 0,2,0,0
-PRODUCTVERSION 0,2,0,0
+FILEVERSION 0,3,0,0
+PRODUCTVERSION 0,3,0,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -11,8 +11,8 @@ BEGIN
   BEGIN
    VALUE "FileDescription", "BT Karaoke Studio\0"
    VALUE "ProductName", "BT Karaoke\0"
-   VALUE "FileVersion", "0.2.0\0"
-   VALUE "ProductVersion", "0.2.0\0"
+   VALUE "FileVersion", "0.3.0\0"
+   VALUE "ProductVersion", "0.3.0\0"
    VALUE "OriginalFilename", "BTKaraoke.exe\0"
   END
  END

@@ -1,96 +1,99 @@
-# BT Karaoke Studio 0.2 architecture
+# BT Karaoke Studio 0.3 architecture
 
-Application source is independent of HandyKaraoke. The old implementation is
-preserved in the legacy-handykaraoke branch, not compiled into this application.
+BT application code is independent of HandyKaraoke. Its legacy implementation is
+preserved only in a separate branch. Reference inspection of Handy's NCN behavior
+informed the import workflow, not the implementation or application license.
 
-## Signal path
+## Signal graph
 
-MIDI/KAR/NCN file -> bounded parser and tempo-to-seconds conversion -> transport
-scheduler -> per-part SoundFont instances -> ordered FX chains -> strip gain/pan
-and mute/solo -> direct master or group bus A–F (plus post-fader send to F)
--> ordered bus FX -> bus gain/pan/mute/solo -> stereo sum -> master FX -> master gain -> output safety clamp
--> miniaudio default output device.
+MIDI/KAR/NCN -> scheduler -> channel program/bank/controller state -> 128 SoundFont
+program strips + 47 independent GM drum-note strips -> ordered FX -> gain/pan and
+mute/solo -> chosen group bus or Master, plus post-fader send to Bus 5 -> bus FX ->
+bus gain/pan/mute/solo -> Master FX/gain -> finite clamp -> miniaudio output.
 
-There are 15 melodic MIDI parts and 47 independent GM drum-note parts (35–81).
-The first eight legacy part indices retain their representative note identities;
-remaining GM notes occupy indices 23–61. Master is 62 and buses A–F are 63–68.
-Hi-hat choke is explicitly preserved across closed/pedal/open channels.
-Bus outputs are fixed to Master, so the graph is acyclic. Direct channels are
-excluded when any group bus is soloed. Post-fader sends to Bus F remain independent
-of group bus gain. Set return FX to fully wet for conventional send/return use. TSF copies share the loaded sample data
-but have independent voices so Kick FX cannot process Snare audio.
+Program strips occupy 0–127. GM drum notes occupy 128–174; the first eight preserve
+legacy representative note order and remaining GM notes follow. Master is 175.
+Dynamic buses start at 176, with five created for a new engine. Bus output is fixed
+to Master, so arbitrary feedback cannot be created. The UI provides an Add Bus action.
+Strips are dynamic vectors, peaks are a deque of atomics, and bus scratch buffers
+grow under the graph mutex. There is no fixed bus/FX count ceiling in the UI.
 
-VST3 instruments replace the signal at their position in the chain and receive
-note events. Effect and instrument classes use the official VST3 hosting APIs.
-Mono output is duplicated to stereo; unsupported output layouts are rejected.
+Each program has a TSF copy sharing sample data, with separate MIDI channel state
+and voices. A program change routes subsequent notes to the appropriate program
+strip; outstanding note assignments are tracked per source channel/note in FIFO
+order, so note-offs reach the original sound even after a program change or an
+overlapping same-pitch note. Controllers reach programs used by that channel.
+Bank variants share their program strip; strip names come from SoundFont bank 0.
+Missing presets do not fall back silently to another melodic program. Closed and
+pedal hi-hat explicitly choke the open-hat part. VST note events preserve MIDI
+channel identity when several source channels share one program strip.
 
-## Ownership and threading
+## Audio and threading
 
-The UI constructs effects and plugin instances. The audio callback renders at
-48 kHz, stereo float32, subdividing driver buffers into blocks of at most 256
-samples. The host prepares VST3 buffers for up to 512 samples.
+Output is 48 kHz stereo float, rendered in chunks of at most 256 frames. Plugin
+buffers allow up to 512 frames. UI graph edits use a mutex; render uses try_lock
+and outputs silence during an edit. This design is not a hard real-time guarantee.
+Plugin parameter edits use a short separate mutex and pending-value array.
+FX chains are vectors; practical limits are CPU, RAM and plugin behavior.
 
-Engine graph/state edits use a mutex; the callback uses try_lock and emits silence
-rather than waiting during a graph edit. This is an initial design, not a hard
-real-time guarantee. Large state changes can briefly interrupt playback. Plugin
-parameter edits use a separate short lock and pending-value array.
+VST3 discovery runs in a subprocess with a 12-second timeout. Active plugin DSP
+runs in-process; faulty plugins can crash the app. Mono output is duplicated to
+stereo; unsupported layouts are rejected. VST2/32-bit, sidechain, delay compensation,
+complete CC mapping and dynamic plugin I/O reconfiguration are not implemented.
 
-FX chains are dynamically sized vectors, with no app-level FX count cap. Actual
-limits are CPU, memory, and the plugins themselves. Bypassed VST3 instances still
-process note/control state while their output is discarded, avoiding hung notes.
-Built-in FX bypasses skip their processing.
+## Persistent song library
 
-Plugin discovery launches the same executable in --scan-vst3 mode, writes a JSON
-result file, and terminates scans after 12 seconds. Discovery is isolated; active
-plugin DSP is in-process and a faulty plugin can crash the host. Preset files are
-trusted user files and may load the plugin paths they contain.
+SongLibrary uses a uniquely named Qt QSQLITE connection owned by the UI thread.
+Only metadata is stored/loaded for browsing: id, title, artist, key, BPM, duration
+and file path. Events/full timed lyrics load at playback. An in-memory path-to-index
+hash preserves queue references while scans append/update songs. Imports use a
+SQLite transaction, with cancellation retaining successfully processed entries.
+The browser limits displayed results to 1,000; searches inspect the full metadata set.
 
-## Persistence
+The managed NCN root defaults to AppData/NCN, with Song/Lyrics/Cursor directories.
+Folder import validates MIDI and companions, preserves relative paths, copies all
+three using QSaveFile and cleans up newly created files on failure. Existing targets
+with different contents are rejected. Registered external NCN roots can be indexed
+without copying and rescanned. Original source files are never removed.
 
-.btproject and .btchain are schema-versioned JSON. QSaveFile commits atomically.
-Plugin component state is base64 and normalized controller values are also saved
-so offline edits survive before an audio callback has applied them. Songs,
-SoundFonts, and third-party plugins remain external references.
+library.sqlite and plugin registry live under applicationDataPath(). QSettings keeps
+NCN storage roots and lyric preferences. BT_KARAOKE_DATA_DIR can override the data
+folder; smoke/startup checks set it to a temporary directory to protect user data.
 
-## Extension boundaries
+## Lyrics and appearance
 
-No VST2/32-bit bridge, AU/AAX, sidechain routing, plugin delay compensation,
-dynamic I/O reconfiguration, or complete MIDI-controller mapping is implemented
-in 0.1. No recording, microphone processing, MP4/MP3 player or QR request server
-is claimed. The tests include an original gain VST3 module, not a commercial
-plugin-compatibility certification. Qt and the audio/hosting SDKs keep their own
-licenses; see THIRD_PARTY.md.
+A Fusion dark QPalette defines Window/Base/Text/Button colors for all Qt windows,
+plus explicit styles for views, combo popups and dialogs. Color swatches choose
+black/white text from their brightness. Native OS file dialogs keep OS styling.
+LyricsStyle stores font, point size, weight, background/text/sung colors, vertical
+alignment, margins and timing offset; controls provide a live preview. Settings
+persist with QSettings and optionally inside project JSON. The stage uses this
+style rather than hardcoded lyric colors/font.
 
-## Startup lifecycle (0.1.1)
+## Projects and startup
 
-The Windows entry point is a small, statically linked native launcher. It starts
-BTKaraokeApp.exe, preserves the exit code, and reports startup errors without
-requiring Qt. The Qt process logs before constructing QApplication.
+Schema 3 stores the complete dynamic mixer and lyric preferences. Legacy schemas
+1/2 are converted with an explicit warning: channel-based mixes cannot map exactly
+to program-based mixes when channels share a program. Drum chains/buses are migrated;
+users must review melodic chains and Send routing. QSaveFile saves atomically.
+SoundFonts, song files and third-party plugins remain external references.
 
-MainWindow is shown before a zero-delay task launches a separate audio-probe
-process. A probe crash/failure/12-second timeout leaves the UI offline. After a
-successful probe, audio initializes on a worker thread. MainWindow and that
-worker share ownership of Engine; closing the window requests cancellation and
-never waits on a driver initialization lock. This preserves engine lifetime
-while a worker finishes. Windows audio initialization excludes the silent null
-backend, so a missing audio device is reported rather than presented as ready.
+The Windows executable is a static native launcher that starts BTKaraokeApp.exe,
+logs/reports child failures and returns the exit code without depending on Qt.
+The Qt window appears before a separate audio probe (12-second timeout). On success,
+a worker initializes the device while sharing Engine lifetime with the UI. Failure
+leaves the window available. Safe Mode skips automatic audio startup. Tests cover
+safe/normal launch, delayed/failed initialization, package install/open/uninstall,
+and deliberate missing-Qt failure using a developer-PATH-free environment.
 
-Safe mode skips automatic audio initialization. Startup tests exercise both the
-normal and safe paths, and unit tests inject delayed/failed initialization and
-verify engine lifetime when its window owner releases it during initialization.
+## External MIDI
 
-## External MIDI (0.2)
-
-A WinMM worker owns the MIDI device and performs driver calls outside the audio
-callback. A bounded 8192-message queue resets on overflow. Transport events keep
-the source MIDI channel and apply melodic transpose. Melody and mute/solo filter
-note-on; note-off always passes. Stop, seek, transpose, melody/mute/solo and port
-changes reset pending notes. Reset also sends sustain-off and all-notes-off.
-The miniaudio render callback remains the transport clock, including MIDI-only
-mode; an active output device is required. MIDI-only mode mutes final PCM output.
-There is no SysEx, MIDI Clock or audio-to-loopMIDI conversion. UI mixer gain/pan
-and audio FX are not converted into external MIDI automation. External output
-cannot be tested end-to-end without an installed loopback port and receiving app.
-Project schema 2 stores routing, send, names and melody settings; it migrates old
-24-strip schema 1 projects, replicating each legacy drum-group chain per GM note.
-Ports are intentionally reconnected by the user per session.
+A WinMM worker owns the port and performs driver calls outside render. A bounded
+8192-message queue resets on overflow. Events retain source MIDI channels and apply
+melodic transpose. Melody/mute/solo filter note-on; note-off passes. Reset sends
+sustain-off/all-notes-off. Stop/seek/transpose/port and mix changes prevent hanging
+external notes. Ports are reconnected manually per session. The render callback is
+the transport clock even for MIDI-only output, requiring a working audio device.
+There is no audio-to-loopMIDI conversion: audio FX, gain/pan and bus audio remain
+inside BT. No MIDI input, SysEx or MIDI Clock is claimed. An installed loopMIDI port
+and receiving application are required for real end-to-end validation.
