@@ -22,7 +22,25 @@ jobs:
           cache: true
       - name: Build, test and stage
         shell: pwsh
-        run: ./packaging/build-windows.ps1
+        run: |
+          try {
+            ./packaging/build-windows.ps1 *>&1 | Tee-Object -FilePath build-windows-output.txt
+          } catch {
+            $_ | Out-String | Tee-Object -FilePath build-windows-output.txt -Append | Write-Host
+            exit 1
+          }
+      - name: Summarize validation
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($file in @('build-windows-tests/results.txt', 'build-windows-output.txt')) {
+            if (Test-Path $file) {
+              Add-Content $env:GITHUB_STEP_SUMMARY "## $file"
+              Add-Content $env:GITHUB_STEP_SUMMARY '```text'
+              Get-Content $file -Tail 90 | Add-Content $env:GITHUB_STEP_SUMMARY
+              Add-Content $env:GITHUB_STEP_SUMMARY '```'
+            }
+          }
       - name: Create installer
         shell: pwsh
         run: |
