@@ -122,7 +122,10 @@ bool libraryTask(QWidget *parent, QProgressBar *bar, QLabel *file,
     loop.exec();
     poll.stop();
     worker.join();
-    busy.close();
+    {
+        QSignalBlocker block(&busy);
+        busy.close();
+    }
     bar->setRange(0, 100);
     bar->setValue(job->success ? 100 : 0);
     if (!job->error.isEmpty() && !job->cancel)
@@ -636,6 +639,24 @@ bool MainWindow::verifyDatabaseUi() {
     responder.start();
     manageNcn();
     responder.stop();
+    bool sawError = false;
+    QTimer dismissError;
+    dismissError.setInterval(10);
+    connect(&dismissError, &QTimer::timeout, this, [&] {
+        auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (box && box->windowTitle() == "ฐานข้อมูลเพลง") {
+            sawError = box->text().contains("ที่เก็บ NCN");
+            box->accept();
+        }
+    });
+    QProgressBar probe;
+    QLabel result;
+    dismissError.start();
+    bool invalidAccepted =
+        rebuildSongDatabase(fixture.path() + "/missing", {}, &probe, &result, this);
+    dismissError.stop();
+    good = good && !invalidAccepted && sawError && library.size() == 2 &&
+           result.text().startsWith("ไม่สำเร็จ");
     QFile unchanged(ncn + "/Song/001.mid");
     if (!unchanged.open(QFile::ReadOnly))
         return false;
