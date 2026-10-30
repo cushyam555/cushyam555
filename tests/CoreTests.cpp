@@ -149,6 +149,8 @@ class CoreTests : public QObject {
             audible |= std::abs(sample) > .00001f;
         QVERIFY(audible);
         engine.render(b, 512);
+        // The sampler applies a 10 ms de-click release; check after that fade.
+        engine.render(b, 512);
         for (int i = 992; i < 1024; ++i)
             QVERIFY(std::abs(b[i]) < .00001f);
     }
