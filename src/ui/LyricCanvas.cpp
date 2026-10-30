@@ -60,8 +60,12 @@ void LyricCanvas::setSong(const QVector<Lyric> &events, double duration) {
                          ? events[i + 1].time
                          : std::min(duration, start + std::max(.25, text.size() * .1));
         end = std::max(end, start);
+        int glyphs = 0, cursor = 0;
+        for (auto ch : text)
+            if (ch != '\n')
+                ++glyphs;
         for (int c = 0; c < text.size(); ++c) {
-            double t = start + (end - start) * c / std::max(1, int(text.size()));
+            double t = start + (end - start) * cursor / std::max(1, glyphs);
             auto &row = rows.last();
             if (text[c] == '\n') {
                 if (!row.text.isEmpty()) {
@@ -71,6 +75,7 @@ void LyricCanvas::setSong(const QVector<Lyric> &events, double duration) {
             } else {
                 row.text += text[c];
                 row.boundaries.push_back(t);
+                ++cursor;
             }
         }
         if (i == events.size() - 1 && !rows.last().text.isEmpty())

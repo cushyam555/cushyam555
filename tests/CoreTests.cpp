@@ -356,6 +356,11 @@ class CoreTests : public QObject {
         QVERIFY(std::abs(canvas.progress(0, .25) - .25) < .001);
         QVERIFY(std::abs(canvas.progress(0, .75) - .75) < .001);
         QCOMPARE(canvas.frameInterval(), 33);
+        canvas.setSong({{0, "\\AB"}, {2, "\\CD"}, {4, "\\EF"}}, 6);
+        QCOMPARE(canvas.lineCount(), 3);
+        QVERIFY(std::abs(canvas.progress(0, .5) - .5) <
+                .001); // KAR line markers consume no singing time
+        QVERIFY(std::abs(canvas.progress(1, 2.5) - .5) < .001);
         style.performance = 2;
         canvas.setAppearance(style);
         QCOMPARE(canvas.frameInterval(), 8);
