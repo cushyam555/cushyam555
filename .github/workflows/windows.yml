@@ -1,9 +1,9 @@
-name: Build BT Karaoke for Windows
+name: BT Karaoke Studio - Windows
 on:
-  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore: ['**.md']
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -17,63 +17,34 @@ jobs:
           arch: x64
       - uses: jurplel/install-qt-action@v4
         with:
-          version: '5.15.2'
-          arch: win64_msvc2019_64
+          version: '6.8.3'
+          arch: win64_msvc2022_64
           cache: true
-      - name: Build, test and stage
+      - name: Build, test VST3 hosting and verify installer
         shell: pwsh
         run: |
           try {
-            ./packaging/build-windows.ps1 *>&1 | Tee-Object -FilePath build-windows-output.txt
+            ./packaging/windows.ps1 *>&1 | Tee-Object windows-output.txt
           } catch {
-            $_ | Out-String | Tee-Object -FilePath build-windows-output.txt -Append | Write-Host
-            $diagnostics = (Get-Content build-windows-output.txt -Tail 35 | Out-String)
-            if (Test-Path build-windows-tests/results.txt) {
-              $diagnostics = (Get-Content build-windows-tests/results.txt | Out-String) + $diagnostics
+            $diagnostics = ($_ | Out-String) + (Get-Content windows-output.txt -Tail 50 | Out-String)
+            if (Test-Path build/Testing/Temporary/LastTest.log) {
+              $diagnostics = $diagnostics + (Get-Content build/Testing/Temporary/LastTest.log -Tail 90 | Out-String)
             }
-            if ($diagnostics.Length -gt 14000) { $diagnostics = $diagnostics.Substring($diagnostics.Length - 14000) }
-            $diagnostics = $diagnostics.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Host "::error title=BT Karaoke Windows diagnostics::$diagnostics"
+            if ($diagnostics.Length -gt 22000) { $diagnostics = $diagnostics.Substring($diagnostics.Length - 22000) }
+            $diagnostics = $diagnostics.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            Write-Host "::error title=BT Studio Windows diagnostics::$diagnostics"
             exit 1
           }
-      - name: Summarize validation
-        if: always()
-        shell: pwsh
-        run: |
-          foreach ($file in @('build-windows-tests/results.txt', 'build-windows-output.txt')) {
-            if (Test-Path $file) {
-              Add-Content $env:GITHUB_STEP_SUMMARY "## $file"
-              Add-Content $env:GITHUB_STEP_SUMMARY '```text'
-              Get-Content $file -Tail 90 | Add-Content $env:GITHUB_STEP_SUMMARY
-              Add-Content $env:GITHUB_STEP_SUMMARY '```'
-            }
-          }
-      - name: Create installer
-        shell: pwsh
-        run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/bt-x64.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-FileHash installer-output/*.exe -Algorithm SHA256 | Format-List | Out-File installer-output/SHA256.txt
-      - name: Test installed package
-        shell: pwsh
-        run: |
-          try {
-            ./packaging/test-windows-installer.ps1
-          } catch {
-            $message = ($_ | Out-String).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Host "::error title=BT Karaoke installer diagnostics::$message"
-            exit 1
-          }
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: BT-Karaoke-Windows-x64
+          name: BT-Karaoke-Studio-0.1.0-Windows-x64
           path: installer-output/
           if-no-files-found: error
-      - name: Upload test results
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: BT-Karaoke-test-results
-          path: build-windows-tests/results.txt
+          name: BT-Studio-test-results
+          path: |
+            build/Testing/Temporary/LastTest.log
+            windows-output.txt
           if-no-files-found: ignore
