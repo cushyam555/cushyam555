@@ -18,6 +18,9 @@ class SongLibrary {
     void endBatch();
     QVector<Song> entries() const;
     void removeMissing();
-    static QString copyNcn(const QString &midi, const QString &destinationRoot);
+    static QString copyNcn(const QString &midi, const QString &destinationRoot,
+                           bool overwrite = false);
+    static QString copyKar(const QString &source, const QString &destination,
+                           bool overwrite = false);
 };
 } // namespace bt

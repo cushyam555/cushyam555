@@ -6,6 +6,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QUuid>
 #include <QVariant>
 #include <stdexcept>
@@ -115,50 +116,79 @@ void SongLibrary::removeMissing() {
             checked(q.exec(), q.lastError().text());
         }
 }
-QString SongLibrary::copyNcn(const QString &midi, const QString &root) {
+namespace {
+void replaceFiles(const QStringList &sources, const QStringList &targets, bool overwrite) {
+    for (int i = 0; i < targets.size(); ++i)
+        if (QFile::exists(targets[i]) && !overwrite)
+            checked(identical(sources[i], targets[i]),
+                    "Duplicate filename requires Skip or Overwrite: " + targets[i]);
+    auto root = QFileInfo(targets.first()).absolutePath();
+    checked(QDir().mkpath(root), "Cannot create song folder");
+    QTemporaryDir staging(QDir(root).filePath(".bt-import-XXXXXX"));
+    checked(staging.isValid(), "Cannot stage song files");
+    QStringList staged, backups, promoted;
+    for (int i = 0; i < sources.size(); ++i) {
+        auto temp = QDir(staging.path()).filePath(QString("new-%1").arg(i));
+        checked(QFile::copy(sources[i], temp), "Cannot stage song file: " + sources[i]);
+        staged << temp;
+    }
+    for (int i = 0; i < targets.size(); ++i)
+        backups << QString();
+    try {
+        for (int i = 0; i < targets.size(); ++i) {
+            checked(QDir().mkpath(QFileInfo(targets[i]).absolutePath()),
+                    "Cannot create song folder");
+            if (QFile::exists(targets[i])) {
+                if (!overwrite && identical(sources[i], targets[i]))
+                    continue;
+                auto backup = QDir(staging.path()).filePath(QString("old-%1").arg(i));
+                checked(QFile::rename(targets[i], backup),
+                        "Cannot back up existing song: " + targets[i]);
+                backups[i] = backup;
+            }
+            checked(QFile::rename(staged[i], targets[i]),
+                    "Cannot replace song file: " + targets[i]);
+            promoted << targets[i];
+        }
+    } catch (...) {
+        for (const auto &path : promoted)
+            QFile::remove(path);
+        bool recovery = true;
+        for (int i = 0; i < backups.size(); ++i)
+            if (!backups[i].isEmpty() && !QFile::rename(backups[i], targets[i]))
+                recovery = false;
+        if (!recovery) {
+            staging.setAutoRemove(false);
+            throw std::runtime_error(
+                ("Cannot restore originals; backup retained at " + staging.path())
+                    .toUtf8()
+                    .constData());
+        }
+        throw;
+    }
+}
+} // namespace
+QString SongLibrary::copyNcn(const QString &midi, const QString &root, bool overwrite) {
     auto files = ncnFiles(midi);
     checked(!files.midi.isEmpty() && !files.lyrics.isEmpty() && !files.cursor.isEmpty(),
             "NCN requires matching Song, Lyrics and Cursor files");
-    // Validate all source data before creating any destination file.
     readSong(midi);
     auto relative = QDir::cleanPath(files.relative);
     checked(!QDir::isAbsolutePath(relative) && relative != ".." && !relative.startsWith("../"),
             "Invalid NCN relative path");
     QFileInfo info(relative);
     auto base = relative.left(relative.size() - info.suffix().size() - 1);
-    QStringList sources{files.midi, files.lyrics, files.cursor};
     QStringList targets{QDir(root).filePath("Song/" + base + ".mid"),
                         QDir(root).filePath("Lyrics/" + base + ".lyr"),
                         QDir(root).filePath("Cursor/" + base + ".cur")};
-    for (int i = 0; i < 3; ++i)
-        if (QFile::exists(targets[i]))
-            checked(identical(sources[i], targets[i]),
-                    "NCN filename already exists with different contents: " + targets[i]);
-    QStringList created;
-    try {
-        for (int i = 0; i < 3; ++i) {
-            if (QFile::exists(targets[i]))
-                continue;
-            checked(QDir().mkpath(QFileInfo(targets[i]).absolutePath()),
-                    "Cannot create NCN folder");
-            QFile source(sources[i]);
-            checked(source.open(QFile::ReadOnly), source.errorString());
-            QSaveFile target(targets[i]);
-            checked(target.open(QFile::WriteOnly), target.errorString());
-            while (!source.atEnd()) {
-                auto block = source.read(65536);
-                checked(source.error() == QFile::NoError, source.errorString());
-                checked(target.write(block) == block.size(), target.errorString());
-            }
-            checked(target.commit(), target.errorString());
-            created << targets[i];
-        }
-        readSong(targets[0]);
-    } catch (...) {
-        for (const auto &path : created)
-            QFile::remove(path);
-        throw;
-    }
+    replaceFiles({files.midi, files.lyrics, files.cursor}, targets, overwrite);
     return targets[0];
+}
+QString SongLibrary::copyKar(const QString &source, const QString &target, bool overwrite) {
+    checked(QFileInfo(source).suffix().compare("kar", Qt::CaseInsensitive) == 0,
+            "Only KAR files are accepted");
+    readSong(source);
+    replaceFiles({source}, {target}, overwrite);
+    return target;
 }
 } // namespace bt

@@ -57,14 +57,15 @@ void error(QWidget *w, const std::exception &e) {
 }
 } // namespace
 MainWindow::MainWindow(bool offline) {
-    setWindowTitle("BT Karaoke • Studio 0.3");
+    setWindowTitle("BT Karaoke • Studio 0.4");
     QSettings preferences;
-    storageRoot = preferences.value("NCN/storage", applicationDataPath() + "/NCN").toString();
+    storageRoot = preferences.value("NCN/storage").toString();
+    if (!songStorageAllowed(storageRoot, applicationDataPath()))
+        storageRoot.clear();
     ncnRoots = preferences.value("NCN/roots").toStringList();
     lyricStyle.restore(
         QJsonDocument::fromJson(preferences.value("lyrics/style").toByteArray()).object());
-    for (const auto &folder : {"Song", "Lyrics", "Cursor"})
-        QDir().mkpath(QDir(storageRoot).filePath(folder));
+
     resize(1440, 900);
     setMinimumSize(1050, 720);
     setStyleSheet(theme());
@@ -130,18 +131,10 @@ MainWindow::MainWindow(bool offline) {
     button("Lyrics / appearance", midiControls, [this] { lyricsSettings(); }, this);
     button("MIDI / loopMIDI", midiControls, [this] { midiSettings(); }, this);
     button("Panic", midiControls, [this] { engine.panic(); }, this);
-    melodyMute = new QCheckBox("ปิดเมโลดี้");
+    melodyMute = new QCheckBox("ปิดเมโลดี้ (CH9)");
+    melodyMute->setObjectName("melodyMute");
     midiControls->addWidget(melodyMute);
-    melodyChannelControl = new QSpinBox;
-    melodyChannelControl->setRange(1, 16);
-    melodyChannelControl->setValue(4);
-    melodyChannelControl->setPrefix("Ch ");
-    melodyChannelControl->setToolTip("เลือก MIDI channel เมโลดี้ (ค่าเริ่มต้น 4)");
-    midiControls->addWidget(melodyChannelControl);
-    connect(melodyMute, &QCheckBox::toggled, this,
-            [this](bool off) { engine.setMelody(off, melodyChannelControl->value() - 1); });
-    connect(melodyChannelControl, qOverload<int>(&QSpinBox::valueChanged), this,
-            [this](int ch) { engine.setMelody(melodyMute->isChecked(), ch - 1); });
+    connect(melodyMute, &QCheckBox::toggled, this, [this](bool off) { engine.setMelody(off); });
     midiControls->addStretch();
     outer->addWidget(pages, 1);
     auto *libraryPage = new QWidget;
@@ -167,7 +160,7 @@ MainWindow::MainWindow(bool offline) {
     auto *libButtons = new QHBoxLayout;
     left->addLayout(libButtons);
     button(
-        "＋ Import MIDI / KAR / NCN", libButtons, [this] { importSongs(); }, this)
+        "＋ เพิ่มเพลง NCN / KAR", libButtons, [this] { importSongs(); }, this)
         ->setObjectName("primary");
     button("คลัง NCN…", libButtons, [this] { manageNcn(); }, this);
     button(
@@ -210,7 +203,7 @@ MainWindow::MainWindow(bool offline) {
         },
         this);
     button("Remove", qb, [this] { delete queue->takeItem(queue->currentRow()); }, this);
-    auto *hint = new QLabel("ลากเปลี่ยนคิวได้ • ดับเบิลคลิกเพื่อเล่น\nMIDI / KAR และ NCN companion "
+    auto *hint = new QLabel("ลากเปลี่ยนคิวได้ • ดับเบิลคลิกเพื่อเล่น\nNCN / KAR "
                             "files\nเพิ่ม SoundFont ก่อนเล่นเสียง MIDI");
     hint->setObjectName("muted");
     hint->setWordWrap(true);
@@ -290,12 +283,20 @@ MainWindow::MainWindow(bool offline) {
     controls->addSpacing(16);
     controls->addWidget(new QLabel("KEY"));
     auto *key = new QSpinBox;
+    keyControl = key;
+    key->setObjectName("keyControl");
+    key->setSingleStep(1);
+    key->setToolTip("Insert: +1 / Delete: -1");
     key->setRange(-12, 12);
     controls->addWidget(key);
     connect(key, qOverload<int>(&QSpinBox::valueChanged), this,
             [this](int v) { engine.setTranspose(v); });
     controls->addWidget(new QLabel("TEMPO"));
     auto *tempo = new QSpinBox;
+    tempoControl = tempo;
+    tempo->setObjectName("tempoControl");
+    tempo->setSingleStep(1);
+    tempo->setToolTip("Page Up: +1% / Page Down: -1%");
     tempo->setRange(50, 150);
     tempo->setValue(100);
     tempo->setSuffix("%");
@@ -314,8 +315,10 @@ MainWindow::MainWindow(bool offline) {
     }
     rebuildChain();
     auto *timer = new QTimer(this);
+    refreshTimer = timer;
     connect(timer, &QTimer::timeout, this, [this] { refresh(); });
-    timer->start(40);
+    applyPerformance();
+    qApp->installEventFilter(this);
     status->setWordWrap(true);
     status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     status->setMaximumHeight(40);
@@ -387,6 +390,93 @@ bool MainWindow::smokeReady() const {
     return chain && meters.size() == size_t(engine.trackCount()) && meters[0] && songStore &&
            centralWidget() && engine.strips[MasterPart].fx.size() == 1;
 }
+bool MainWindow::verifyControlsUi() {
+    keyControl->setValue(0);
+    tempoControl->setValue(100);
+    keyControl->setFocus();
+    auto send = [this](int key) {
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        QApplication::sendEvent(keyControl, &press);
+    };
+    send(Qt::Key_Insert);
+    if (keyControl->value() != 1)
+        return false;
+    send(Qt::Key_Delete);
+    if (keyControl->value() != 0)
+        return false;
+    send(Qt::Key_PageUp);
+    if (tempoControl->value() != 101)
+        return false;
+    send(Qt::Key_PageDown);
+    if (tempoControl->value() != 100)
+        return false;
+    keyControl->setValue(12);
+    send(Qt::Key_Insert);
+    if (keyControl->value() != 12)
+        return false;
+    keyControl->setValue(0);
+    melodyMute->click();
+    bool good = engine.melodyMuted() && engine.melodyChannel() == 8;
+    melodyMute->click();
+    return good;
+}
+bool MainWindow::verifyImportUi() {
+    QTemporaryDir fixture;
+    if (!fixture.isValid())
+        return false;
+    storageRoot = fixture.path() + "/songs";
+    auto file = fixture.path() + "/test.kar";
+    QByteArray track = QByteArray::fromHex("00903c648360803c0000ff2f00");
+    QByteArray bytes = QByteArray::fromHex("4d546864000000060000000101e04d54726b");
+    for (int i = 24; i >= 0; i -= 8)
+        bytes.append(char(track.size() >> i));
+    bytes += track;
+    auto write = [&](const QByteArray &data) {
+        QFile f(file);
+        return f.open(QFile::WriteOnly) && f.write(data) == data.size();
+    };
+    if (!write(bytes))
+        return false;
+    bool replace = false;
+    int decisions = 0;
+    QTimer responder;
+    responder.setInterval(10);
+    connect(&responder, &QTimer::timeout, this, [&] {
+        auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (!box)
+            return;
+        QString want = box->windowTitle() == "ผลวิเคราะห์ก่อนนำเข้า" ? QString("เริ่มนำเข้า")
+                       : replace                                 ? QString("ทับไฟล์")
+                                                                 : QString("ข้าม");
+        for (auto *button : box->buttons())
+            if (button->text() == want) {
+                ++decisions;
+                button->click();
+                break;
+            }
+    });
+    responder.start();
+    runImport({file}, true);
+    auto target = QDir(storageRoot).filePath("KAR/test.kar");
+    auto read = [&] {
+        QFile f(target);
+        if (!f.open(QFile::ReadOnly))
+            return QByteArray();
+        return f.readAll();
+    };
+    if (read() != bytes || library.size() != 1)
+        return false;
+    if (!write(bytes + "updated"))
+        return false;
+    runImport({file}, true);
+    if (read() != bytes)
+        return false;
+    replace = true;
+    runImport({file}, true);
+    responder.stop();
+    return read() == bytes + "updated" && decisions == 5 && library.size() == 1 &&
+           songStorageAllowed(target, applicationDataPath());
+}
 bool MainWindow::verifyMixerUi() {
     int before = engine.trackCount();
     auto *add = findChild<QPushButton *>("addBusButton");
@@ -413,9 +503,8 @@ bool MainWindow::verifyMixerUi() {
     return chain->count() == 1 && meters[bus] && selectButtons[bus]->isVisible();
 }
 void MainWindow::importSongs() {
-    importPaths(QFileDialog::getOpenFileNames(
-        this, "Import MIDI / KAR / NCN", {},
-        "MIDI / NCN (*.mid *.midi *.kar *.lyr *.cur);;All files (*)"));
+    importPaths(QFileDialog::getOpenFileNames(this, "เพิ่มเพลง NCN / KAR", {},
+                                              "NCN / KAR (*.mid *.midi *.lyr *.cur *.kar)"));
 }
 void MainWindow::savePreferences() {
     QSettings settings;
@@ -425,8 +514,16 @@ void MainWindow::savePreferences() {
                       QJsonDocument(lyricStyle.save()).toJson(QJsonDocument::Compact));
 }
 void MainWindow::reloadLibrary() {
-    if (songStore)
-        library = songStore->entries();
+    if (songStore) {
+        auto stored = songStore->entries();
+        library.clear();
+        for (auto &song : stored) {
+            auto files = ncnFiles(song.path);
+            if (QFileInfo(song.path).suffix().compare("kar", Qt::CaseInsensitive) == 0 ||
+                (!files.lyrics.isEmpty() && !files.cursor.isEmpty()))
+                library.push_back(std::move(song));
+        }
+    }
     libraryMap.clear();
     for (int i = 0; i < library.size(); ++i)
         libraryMap.insert(songKey(library[i].path), i);
@@ -460,14 +557,16 @@ void MainWindow::manageNcn() {
     dialog.resize(650, 400);
     auto *layout = new QVBoxLayout(&dialog);
     auto *intro = new QLabel("เพิ่มเพลง → อ่านรหัส/ชื่อ/ศิลปินลงฐานข้อมูล → ค้นหาและเข้าคิว\n"
-                             "ไฟล์ที่นำเข้าจะเก็บเป็นชุด Song / Lyrics / Cursor และจำคลังไว้หลังปิดโปรแกรม");
+                             "เพลงอยู่ในโฟลเดอร์ที่คุณเลือกนอกข้อมูลแอป และจำคลังไว้หลังปิดโปรแกรม");
     intro->setWordWrap(true);
     layout->addWidget(intro);
-    auto *path = new QLabel("ที่เก็บ NCN: " + QDir::toNativeSeparators(storageRoot));
+    auto *path =
+        new QLabel("ที่เก็บเพลง: " + (storageRoot.isEmpty() ? QString("ยังไม่ได้เลือก")
+                                                         : QDir::toNativeSeparators(storageRoot)));
     path->setWordWrap(true);
     path->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(path);
-    button("เพิ่มไฟล์เพลง NCN…", layout, [this] { importSongs(); }, &dialog);
+    button("เพิ่มไฟล์เพลง NCN / KAR…", layout, [this] { importSongs(); }, &dialog);
     button("นำเข้าชุด NCN จากโฟลเดอร์…", layout, [this] { importFolder(); }, &dialog);
     button(
         "เลือกโฟลเดอร์ NCN ที่มีอยู่และอัปเดตคลัง…", layout,
@@ -497,41 +596,119 @@ void MainWindow::manageNcn() {
         &dialog);
     button(
         "เปิดที่เก็บ NCN", layout,
-        [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(storageRoot)); }, &dialog);
+        [this] {
+            if (chooseStorage())
+                QDesktopServices::openUrl(QUrl::fromLocalFile(storageRoot));
+        },
+        &dialog);
     button(
         "เปลี่ยนที่เก็บ NCN สำหรับเพลงที่นำเข้าใหม่…", layout,
         [this, path] {
-            auto root = QFileDialog::getExistingDirectory(this, "เลือกที่เก็บ NCN ใหม่", storageRoot);
-            if (root.isEmpty())
-                return;
-            if (!ncnRoots.contains(storageRoot))
-                ncnRoots << storageRoot;
-            storageRoot = root;
-            for (const auto &folder : {"Song", "Lyrics", "Cursor"})
-                QDir().mkpath(QDir(root).filePath(folder));
-            path->setText("ที่เก็บ NCN: " + QDir::toNativeSeparators(root));
-            savePreferences();
+            storageRoot.clear();
+            if (chooseStorage())
+                path->setText("ที่เก็บเพลง: " + QDir::toNativeSeparators(storageRoot));
         },
         &dialog);
     auto *note = new QLabel("การเปลี่ยนที่เก็บไม่ย้ายหรือลบเพลงเดิม และไม่ลบไฟล์ต้นฉบับ\n"
-                            "ค้นหาได้ด้วยรหัสเพลง ชื่อเพลง ศิลปิน หรือคีย์เพลง; ไม่รองรับ HNK");
+                            "ค้นหาได้ด้วยรหัสเพลง ชื่อเพลง ศิลปิน หรือคีย์เพลง");
     note->setWordWrap(true);
     layout->addWidget(note);
     button("ปิด", layout, [&dialog] { dialog.accept(); }, &dialog);
     dialog.exec();
 }
+bool MainWindow::chooseStorage() {
+    if (songStorageAllowed(storageRoot, applicationDataPath()) &&
+        songStorageAllowed(storageRoot, QCoreApplication::applicationDirPath()))
+        return true;
+    auto root = QFileDialog::getExistingDirectory(
+        this, "เลือกที่เก็บเพลงนอกโฟลเดอร์ข้อมูล BT Karaoke",
+        QStandardPaths::writableLocation(QStandardPaths::MusicLocation));
+    if (root.isEmpty())
+        return false;
+    if (!songStorageAllowed(root, applicationDataPath()) ||
+        !songStorageAllowed(root, QCoreApplication::applicationDirPath())) {
+        QMessageBox::warning(this, "ที่เก็บเพลง",
+                             "กรุณาเลือกโฟลเดอร์เพลงนอกข้อมูลและโฟลเดอร์ติดตั้ง BT Karaoke");
+        return false;
+    }
+    storageRoot = root;
+    savePreferences();
+    return true;
+}
 void MainWindow::scanNcn(const QString &root, bool copy) {
     auto folder = ncnSongFolder(root);
     if (folder.isEmpty()) {
-        QMessageBox::warning(this, "NCN", "ต้องเลือกโฟลเดอร์รากที่มี Song / Lyrics / Cursor");
+        QMessageBox::warning(this, "NCN", "ไม่พบโฟลเดอร์ Song");
         return;
     }
-    QProgressDialog progress("กำลังสแกนคลัง NCN…", "ยกเลิก", 0, 0, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(100);
-    QStringList errors;
-    int added = 0, updated = 0, failed = 0;
+    QStringList files;
+    QProgressDialog scanning("กำลังนับไฟล์เพลง…", "ยกเลิก", 0, 0, this);
+    scanning.setWindowModality(Qt::ApplicationModal);
     QDirIterator it(folder, QDir::Files, QDirIterator::Subdirectories);
+    int examined = 0;
+    while (it.hasNext()) {
+        auto path = it.next();
+        auto ext = QFileInfo(path).suffix().toLower();
+        if (ext == "mid" || ext == "midi" || ext == "kar")
+            files << path;
+        if (++examined % 100 == 0) {
+            QApplication::processEvents();
+            if (scanning.wasCanceled())
+                return;
+        }
+    }
+    scanning.close();
+    runImport(files, copy);
+}
+void MainWindow::importPaths(const QStringList &paths) {
+    runImport(paths, true);
+}
+void MainWindow::runImport(const QStringList &paths, bool copy) {
+    if (paths.isEmpty())
+        return;
+    if (copy && !chooseStorage())
+        return;
+    QProgressDialog analysis("กำลังวิเคราะห์จำนวนเพลงและชื่อซ้ำ…", "ยกเลิก", 0, paths.size(), this);
+    analysis.setWindowModality(Qt::ApplicationModal);
+    auto plan = analyzeImport(paths, storageRoot, copy, [&](int i, int) {
+        analysis.setValue(i);
+        return !analysis.wasCanceled();
+    });
+    bool canceled = analysis.wasCanceled();
+    analysis.close();
+    if (canceled)
+        return;
+    for (auto &item : plan.items)
+        if (!item.duplicate && libraryMap.contains(songKey(item.destination))) {
+            item.duplicate = true;
+            ++plan.duplicates;
+        }
+    if (plan.items.isEmpty()) {
+        QMessageBox::information(this, "วิเคราะห์เพลง",
+                                 "ไม่พบเพลง NCN / KAR ที่นำเข้าได้\n" +
+                                     plan.errors.mid(0, 20).join('\n'));
+        return;
+    }
+    QMessageBox summary(this);
+    summary.setWindowTitle("ผลวิเคราะห์ก่อนนำเข้า");
+    summary.setText(QString("พบเพลง %1 เพลง\nชื่อไฟล์/รายการซ้ำ %2 เพลง\nไฟล์ที่ไม่ผ่าน %3 ไฟล์\n\n%4")
+                        .arg(plan.items.size())
+                        .arg(plan.duplicates)
+                        .arg(plan.errors.size())
+                        .arg(copy ? "ที่เก็บ: " + QDir::toNativeSeparators(storageRoot)
+                                  : "เพิ่มรายการจากที่เก็บเดิม โดยไม่คัดลอกไฟล์"));
+    summary.setDetailedText(plan.errors.mid(0, 30).join('\n'));
+    auto *start = summary.addButton("เริ่มนำเข้า", QMessageBox::AcceptRole);
+    summary.addButton(QMessageBox::Cancel);
+    summary.exec();
+    if (summary.clickedButton() != start)
+        return;
+    enum Choice { Ask, Skip, Overwrite };
+    Choice all = Ask;
+    int added = 0, updated = 0, skipped = 0, failed = 0;
+    QStringList errors;
+    QProgressDialog progress("กำลังนำเข้าเพลง…", "ยกเลิก", 0, plan.items.size(), this);
+    progress.setWindowModality(Qt::ApplicationModal);
     try {
         if (!songStore)
             throw std::runtime_error("Library unavailable");
@@ -540,22 +717,53 @@ void MainWindow::scanNcn(const QString &root, bool copy) {
         error(this, e);
         return;
     }
-    while (it.hasNext()) {
-        auto file = it.next();
-        auto ext = QFileInfo(file).suffix().toLower();
-        if (ext != "mid" && ext != "midi" && ext != "kar")
-            continue;
-        QApplication::processEvents();
+    for (int i = 0; i < plan.items.size(); ++i) {
+        progress.setValue(i);
         if (progress.wasCanceled())
             break;
-        progress.setLabelText("NCN • " + QFileInfo(file).fileName());
+        auto item = plan.items[i];
+        bool duplicate = item.duplicate || libraryMap.contains(songKey(item.destination));
+        if (copy && QFileInfo::exists(item.destination))
+            duplicate = true;
+        Choice choice = Overwrite;
+        if (duplicate) {
+            choice = all;
+            if (choice == Ask) {
+                QMessageBox question(this);
+                question.setWindowTitle("พบชื่อไฟล์เพลงซ้ำ");
+                question.setText(item.song.id + " • " + item.song.title + "\n" +
+                                 QDir::toNativeSeparators(item.destination));
+                question.setInformativeText(copy ? "ต้องการข้าม หรือทับไฟล์เพลงและไฟล์คู่กัน?"
+                                                 : "ต้องการข้าม หรือทับข้อมูลรายการเดิมในคลัง?");
+                auto *skip = question.addButton("ข้าม", QMessageBox::RejectRole);
+                auto *replace =
+                    question.addButton(copy ? "ทับไฟล์" : "ทับรายการ", QMessageBox::AcceptRole);
+                question.addButton(QMessageBox::Cancel);
+                auto *apply = new QCheckBox("ใช้กับรายการซ้ำที่เหลือ");
+                question.setCheckBox(apply);
+                question.setDefaultButton(skip);
+                question.exec();
+                if (question.clickedButton() == skip)
+                    choice = Skip;
+                else if (question.clickedButton() == replace)
+                    choice = Overwrite;
+                else
+                    break;
+                if (apply->isChecked())
+                    all = choice;
+            }
+        }
+        if (choice == Skip) {
+            ++skipped;
+            continue;
+        }
         try {
-            auto files = ncnFiles(file);
-            if (files.lyrics.isEmpty() || files.cursor.isEmpty())
-                throw std::runtime_error("Missing matching Lyrics/Cursor");
+            auto song = item.song;
             if (copy)
-                file = SongLibrary::copyNcn(file, storageRoot);
-            auto song = readSong(file);
+                song.path = item.ncn ? SongLibrary::copyNcn(song.path, storageRoot,
+                                                            duplicate && choice == Overwrite)
+                                     : SongLibrary::copyKar(song.path, item.destination,
+                                                            duplicate && choice == Overwrite);
             if (rememberSong(std::move(song)))
                 ++added;
             else
@@ -563,7 +771,7 @@ void MainWindow::scanNcn(const QString &root, bool copy) {
         } catch (const std::exception &e) {
             ++failed;
             if (errors.size() < 30)
-                errors << QFileInfo(file).fileName() + ": " + e.what();
+                errors << item.song.id + ": " + e.what();
         }
     }
     try {
@@ -573,56 +781,13 @@ void MainWindow::scanNcn(const QString &root, bool copy) {
     }
     progress.close();
     refreshLibrary();
-    status->setText(QString("NCN • เพิ่ม %1 • อัปเดต %2 • ไม่สำเร็จ %3%4")
+    status->setText(QString("เพิ่ม %1 • ทับ/อัปเดต %2 • ข้าม %3 • ไม่สำเร็จ %4")
                         .arg(added)
                         .arg(updated)
-                        .arg(failed)
-                        .arg(progress.wasCanceled() ? " • ยกเลิกแล้ว" : ""));
+                        .arg(skipped)
+                        .arg(failed));
     if (!errors.isEmpty())
-        QMessageBox::warning(this, "NCN import report (first 30)", errors.join('\n'));
-}
-void MainWindow::importPaths(const QStringList &paths) {
-    QStringList errors;
-    QProgressDialog progress("กำลังเพิ่มเพลงเข้าคลัง…", "ยกเลิก", 0, paths.size(), this);
-    progress.setWindowModality(Qt::WindowModal);
-    int added = 0, updated = 0, failed = 0;
-    try {
-        if (!songStore)
-            throw std::runtime_error("Library unavailable");
-        songStore->beginBatch();
-    } catch (const std::exception &e) {
-        error(this, e);
-        return;
-    }
-    for (int i = 0; i < paths.size(); ++i) {
-        progress.setValue(i);
-        if (progress.wasCanceled())
-            break;
-        try {
-            auto song = readSong(paths[i]);
-            auto ncn = ncnFiles(song.path);
-            if (!ncn.midi.isEmpty())
-                song = readSong(SongLibrary::copyNcn(song.path, storageRoot));
-            if (rememberSong(std::move(song)))
-                ++added;
-            else
-                ++updated;
-        } catch (const std::exception &e) {
-            ++failed;
-            if (errors.size() < 30)
-                errors << QFileInfo(paths[i]).fileName() + ": " + e.what();
-        }
-    }
-    try {
-        songStore->endBatch();
-    } catch (const std::exception &e) {
-        error(this, e);
-    }
-    progress.setValue(paths.size());
-    refreshLibrary();
-    status->setText(QString("เพิ่ม %1 • อัปเดต %2 • ไม่สำเร็จ %3").arg(added).arg(updated).arg(failed));
-    if (!errors.isEmpty())
-        QMessageBox::warning(this, "Import report (first 30)", errors.join('\n'));
+        QMessageBox::warning(this, "ผลนำเข้า", errors.join('\n'));
 }
 void MainWindow::rebuildMixer() {
     int page = pages->currentIndex();
@@ -704,7 +869,10 @@ bool MainWindow::loadRow(int row) {
     if (row < 0 || row >= library.size())
         return false;
     try {
+        if (!supportedSong(library[row].path))
+            throw std::runtime_error("รองรับ NCN / KAR เท่านั้น");
         engine.load(readSong(library[row].path));
+        syncLyrics();
     } catch (const std::exception &e) {
         error(this, e);
         return false;
@@ -812,10 +980,11 @@ void MainWindow::mixerPage(QWidget *w) {
                 selectButtons[i]->setChecked(i == p);
             rebuildChain();
         });
-        auto *tag = new QLabel(p == MasterPart  ? "BUS / STEREO"
-                               : p >= BusFirst  ? "GROUP / FX RETURN"
-                               : p >= DrumFirst ? "DRUM NOTE"
-                                                : "SF2 PROGRAM");
+        auto *tag =
+            new QLabel(p == MasterPart  ? "BUS / STEREO"
+                       : p >= BusFirst  ? "GROUP / FX RETURN"
+                       : p >= DrumFirst ? "DRUM NOTE"
+                                        : QString("SF2 PROGRAM %1").arg(p, 3, 10, QChar('0')));
         tag->setObjectName("muted");
         tag->setAlignment(Qt::AlignCenter);
         v->addWidget(tag);
@@ -922,7 +1091,7 @@ void MainWindow::mixerPage(QWidget *w) {
             widgets[i]->setVisible(
                 i == MasterPart ||
                 (category && (search.isEmpty() || name.contains(search, Qt::CaseInsensitive) ||
-                              QString::number(i + 1).contains(search))));
+                              QString::number(i).contains(search))));
         }
     };
     connect(filter, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -1235,18 +1404,22 @@ void MainWindow::openProject() {
         return;
     }
     try {
+        if (!obj["song"].toString().isEmpty() && !supportedSong(obj["song"].toString()))
+            obj["song"] = QString();
         auto warnings = engine.restore(obj);
         if (obj.contains("lyricsStyle")) {
             lyricStyle.restore(obj["lyricsStyle"].toObject());
             savePreferences();
             if (lyrics)
-                lyricStyle.apply(lyrics, stage);
+                lyrics->setAppearance(lyricStyle);
         }
         library.clear();
         libraryMap.clear();
         QVector<int> mapping;
         for (auto v : obj["library"].toArray()) {
             try {
+                if (!supportedSong(v.toString()))
+                    throw std::runtime_error("รองรับ NCN / KAR เท่านั้น");
                 auto s = readSong(v.toString());
                 mapping.push_back(library.size());
                 libraryMap.insert(songKey(s.path), library.size());
@@ -1268,6 +1441,8 @@ void MainWindow::openProject() {
                 q->setData(Qt::UserRole, i);
             }
         }
+        syncLyrics();
+        applyPerformance();
         now->setText(engine.song.title);
         projectPath = path;
         rebuildMixer();
@@ -1319,6 +1494,49 @@ void MainWindow::loadChain() {
         error(this, e);
     }
 }
+void MainWindow::applyPerformance() {
+    engine.setPerformance(lyricStyle.performance);
+    if (refreshTimer)
+        refreshTimer->start(lyricStyle.mixerInterval());
+    if (lyrics)
+        lyrics->setAppearance(lyricStyle);
+}
+void MainWindow::syncLyrics() {
+    if (!lyrics)
+        return;
+    std::lock_guard<std::mutex> lock(engine.mutex);
+    lyrics->setSong(engine.song.lyrics, engine.song.duration);
+}
+bool MainWindow::eventFilter(QObject *object, QEvent *event) {
+    if ((event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) &&
+        !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
+        auto *key = static_cast<QKeyEvent *>(event);
+        int step = key->key();
+        if (key->modifiers() == Qt::NoModifier &&
+            (step == Qt::Key_Insert || step == Qt::Key_Delete || step == Qt::Key_PageUp ||
+             step == Qt::Key_PageDown)) {
+            auto *focus = QApplication::focusWidget();
+            bool editing = qobject_cast<QLineEdit *>(focus) || qobject_cast<QTextEdit *>(focus) ||
+                           qobject_cast<QPlainTextEdit *>(focus);
+            if (!editing || (keyControl && keyControl->isAncestorOf(focus)) ||
+                (tempoControl && tempoControl->isAncestorOf(focus))) {
+                if (event->type() == QEvent::KeyPress) {
+                    if (step == Qt::Key_Insert)
+                        keyControl->stepUp();
+                    else if (step == Qt::Key_Delete)
+                        keyControl->stepDown();
+                    else if (step == Qt::Key_PageUp)
+                        tempoControl->stepUp();
+                    else
+                        tempoControl->stepDown();
+                }
+                event->accept();
+                return true;
+            }
+        }
+    }
+    return QMainWindow::eventFilter(object, event);
+}
 void MainWindow::previewSettings() {
     lyricsSettings();
 }
@@ -1349,6 +1567,16 @@ void MainWindow::lyricsSettings() {
     margin->setRange(0, 120);
     margin->setValue(candidate.margin);
     form->addRow("ระยะขอบ", margin);
+    auto *gap = new QSpinBox;
+    gap->setRange(0, 200);
+    gap->setValue(candidate.lineGap);
+    gap->setSuffix(" px");
+    form->addRow("ระยะห่างเนื้อเพลงบน–ล่าง", gap);
+    auto *performance = new QComboBox;
+    performance->addItems({"พื้นฐาน • 30 FPS / 64 voices", "ขั้นกลาง • 60 FPS / 128 voices",
+                           "สูงสุด • 120 FPS / 256 voices"});
+    performance->setCurrentIndex(candidate.performance);
+    form->addRow("การใช้ทรัพยากรคอม", performance);
     auto *offset = new QDoubleSpinBox;
     offset->setRange(-5, 5);
     offset->setSingleStep(.1);
@@ -1357,8 +1585,12 @@ void MainWindow::lyricsSettings() {
     form->addRow("เลื่อนเวลาเนื้อเพลง (+ เร็วขึ้น)", offset);
     auto *surface = new QWidget;
     auto *previewLayout = new QVBoxLayout(surface);
-    auto *preview = new QLabel;
-    preview->setWordWrap(true);
+    auto *preview = new LyricCanvas;
+    preview->setSong({{0, "ทดสอบเนื้อเพลงบรรทัดบน\n"}, {2, "เนื้อเพลงบรรทัดล่าง"}}, 4);
+    auto previewClock = std::make_shared<QElapsedTimer>();
+    previewClock->start();
+    preview->setClock([previewClock] { return std::fmod(previewClock->elapsed() / 1000., 4.); },
+                      [] { return true; }, [] { return 1.; });
     previewLayout->addWidget(preview);
     surface->setMinimumHeight(200);
     layout->addWidget(surface, 1);
@@ -1369,10 +1601,9 @@ void MainWindow::lyricsSettings() {
         candidate.alignment = align->currentIndex();
         candidate.margin = margin->value();
         candidate.offset = offset->value();
-        candidate.apply(preview, surface);
-        preview->setText("<span style='color:" + candidate.sung.name() +
-                         "'>ทดสอบเนื้อเพลง</span> <span style='color:" + candidate.text.name() +
-                         "'>BT Karaoke</span>");
+        candidate.lineGap = gap->value();
+        candidate.performance = performance->currentIndex();
+        preview->setAppearance(candidate);
     };
     auto colorButton = [&](const QString &title, QColor &color) {
         auto *button = new QPushButton(color.name());
@@ -1406,6 +1637,9 @@ void MainWindow::lyricsSettings() {
     connect(align, qOverload<int>(&QComboBox::currentIndexChanged), &dialog,
             [update](int) { update(); });
     connect(margin, qOverload<int>(&QSpinBox::valueChanged), &dialog, [update](int) { update(); });
+    connect(gap, qOverload<int>(&QSpinBox::valueChanged), &dialog, [update](int) { update(); });
+    connect(performance, qOverload<int>(&QComboBox::currentIndexChanged), &dialog,
+            [update](int) { update(); });
     connect(offset, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog,
             [update](double) { update(); });
     auto *note = new QLabel("หน้าตั้งค่าใช้ธีมมืด; ปุ่มตัวอย่างสีอ่อนใช้ตัวอักษรสีดำเพื่อให้อ่านได้ชัด");
@@ -1419,8 +1653,9 @@ void MainWindow::lyricsSettings() {
     if (dialog.exec() == QDialog::Accepted) {
         lyricStyle = candidate;
         savePreferences();
+        applyPerformance();
         if (lyrics)
-            lyricStyle.apply(lyrics, stage);
+            lyrics->setAppearance(lyricStyle);
     }
 }
 void MainWindow::showStage() {
@@ -1433,10 +1668,12 @@ void MainWindow::showStage() {
         title->setStyleSheet("font-size:18px;color:#a798ff;");
         title->setAlignment(Qt::AlignCenter);
         l->addWidget(title);
-        lyrics = new QLabel("Ready when you are");
-        lyrics->setWordWrap(true);
-        lyrics->setAlignment(Qt::AlignCenter);
-        lyricStyle.apply(lyrics, stage);
+        lyrics = new LyricCanvas;
+        lyrics->setClock([this] { return engine.position.load(); },
+                         [this] { return engine.playing.load(); },
+                         [this] { return engine.playbackSpeed.load(); });
+        syncLyrics();
+        lyrics->setAppearance(lyricStyle);
         l->addWidget(lyrics, 1);
         auto *exit = new QPushButton("Exit fullscreen");
         l->addWidget(exit);
@@ -1475,107 +1712,77 @@ void MainWindow::refresh() {
             count += int(s.fx.size());
         return count;
     }()));
-    for (int i = 0; i < int(meters.size()); ++i) {
-        float peak = engine.peaks[i].load();
-        int value =
-            peak > 0 ? int(std::clamp((20 * std::log10(peak) + 60) / 60., 0., 1.) * 100) : 0;
-        if (meters[i])
-            meters[i]->setValue(value);
-        double volume, pan, send;
-        int output;
-        QString channelName;
-        QStringList fxNames;
-        bool mute, solo;
-        {
-            std::lock_guard<std::mutex> lock(engine.mutex);
-            auto &s = engine.strips[i];
-            volume = s.volume;
-            pan = s.pan;
-            mute = s.mute;
-            solo = s.solo;
-            send = s.fxSend;
-            output = s.output;
-            channelName = s.name;
-            for (const auto &fx : s.fx)
-                fxNames << (fx->bypass ? "○ " : "● ") + fx->name();
+    if (pages->currentIndex() == 1)
+        for (int i = 0; i < int(meters.size()); ++i) {
+            float peak = engine.peaks[i].load();
+            int value =
+                peak > 0 ? int(std::clamp((20 * std::log10(peak) + 60) / 60., 0., 1.) * 100) : 0;
+            if (meters[i])
+                meters[i]->setValue(value);
+            double volume, pan, send;
+            int output;
+            QString channelName;
+            QStringList fxNames;
+            bool mute, solo;
+            {
+                std::lock_guard<std::mutex> lock(engine.mutex);
+                auto &s = engine.strips[i];
+                volume = s.volume;
+                pan = s.pan;
+                mute = s.mute;
+                solo = s.solo;
+                send = s.fxSend;
+                output = s.output;
+                channelName = s.name;
+                for (const auto &fx : s.fx)
+                    fxNames << (fx->bypass ? "○ " : "● ") + fx->name();
+            }
+            if (selectButtons[i]) {
+                selectButtons[i]->setText(QString(channelName).replace(" • ", "\n"));
+                selectButtons[i]->setChecked(i == selected);
+                selectButtons[i]->setToolTip(channelName + "\nRight-click to rename");
+            }
+            if (i == selected)
+                chainTitle->setText(channelName + " / FX");
+            if (fxSummaries[i]) {
+                fxSummaries[i]->setText(fxNames.isEmpty()
+                                            ? "No FX"
+                                            : fxNames.mid(0, 3).join("\n") +
+                                                  (fxNames.size() > 3
+                                                       ? QString("\n+%1 FX").arg(fxNames.size() - 3)
+                                                       : QString()));
+                fxSummaries[i]->setToolTip(fxNames.join("\n"));
+            }
+            if (i < PartCount) {
+                QSignalBlocker routeBlock(routeControls[i]), sendBlock(sendControls[i]);
+                routeControls[i]->setCurrentIndex(routeControls[i]->findData(output));
+                if (!sendControls[i]->isSliderDown())
+                    sendControls[i]->setValue(int(send * 100));
+            }
+            if (volumeControls[i] && !volumeControls[i]->isSliderDown()) {
+                QSignalBlocker block(volumeControls[i]);
+                volumeControls[i]->setValue(int(volume * 100));
+            }
+            if (panControls[i] && !panControls[i]->isSliderDown()) {
+                QSignalBlocker block(panControls[i]);
+                panControls[i]->setValue(int(pan * 100));
+            }
+            if (muteButtons[i]) {
+                QSignalBlocker block(muteButtons[i]);
+                muteButtons[i]->setChecked(mute);
+            }
+            if (soloButtons[i]) {
+                QSignalBlocker block(soloButtons[i]);
+                soloButtons[i]->setChecked(solo);
+            }
         }
-        if (selectButtons[i]) {
-            selectButtons[i]->setText(QString(channelName).replace(" • ", "\n"));
-            selectButtons[i]->setChecked(i == selected);
-            selectButtons[i]->setToolTip(channelName + "\nRight-click to rename");
-        }
-        if (i == selected)
-            chainTitle->setText(channelName + " / FX");
-        if (fxSummaries[i]) {
-            fxSummaries[i]->setText(fxNames.isEmpty()
-                                        ? "No FX"
-                                        : fxNames.mid(0, 3).join("\n") +
-                                              (fxNames.size() > 3
-                                                   ? QString("\n+%1 FX").arg(fxNames.size() - 3)
-                                                   : QString()));
-            fxSummaries[i]->setToolTip(fxNames.join("\n"));
-        }
-        if (i < PartCount) {
-            QSignalBlocker routeBlock(routeControls[i]), sendBlock(sendControls[i]);
-            routeControls[i]->setCurrentIndex(routeControls[i]->findData(output));
-            if (!sendControls[i]->isSliderDown())
-                sendControls[i]->setValue(int(send * 100));
-        }
-        if (volumeControls[i] && !volumeControls[i]->isSliderDown()) {
-            QSignalBlocker block(volumeControls[i]);
-            volumeControls[i]->setValue(int(volume * 100));
-        }
-        if (panControls[i] && !panControls[i]->isSliderDown()) {
-            QSignalBlocker block(panControls[i]);
-            panControls[i]->setValue(int(pan * 100));
-        }
-        if (muteButtons[i]) {
-            QSignalBlocker block(muteButtons[i]);
-            muteButtons[i]->setChecked(mute);
-        }
-        if (soloButtons[i]) {
-            QSignalBlocker block(soloButtons[i]);
-            soloButtons[i]->setChecked(solo);
-        }
-    }
     {
-        QSignalBlocker b(melodyMute), c(melodyChannelControl);
+        QSignalBlocker b(melodyMute);
         melodyMute->setChecked(engine.melodyMuted());
-        melodyChannelControl->setValue(engine.melodyChannel() + 1);
     }
     if (wasPlaying && !engine.playing.load() && engine.song.duration > 0 &&
         pos >= engine.song.duration)
         next();
     wasPlaying = engine.playing.load();
-    if (lyrics) {
-        QString text;
-        int cursor = 0;
-        for (const auto &e : engine.song.lyrics) {
-            QString part = e.text;
-            part.replace('\\', "\n");
-            part.replace('/', "\n");
-            part.replace("\r\n", "\n");
-            part.replace('\r', "\n");
-            text += part;
-            if (e.time <= pos + lyricStyle.offset)
-                cursor = text.size();
-        }
-        int start = text.lastIndexOf('\n', std::max(0, cursor - 1));
-        start = start < 0 ? 0 : start + 1;
-        int end = text.indexOf('\n', cursor);
-        if (end < 0)
-            end = text.size();
-        int next = text.indexOf('\n', end + 1);
-        if (next < 0)
-            next = text.size();
-        QString before = text.mid(start, cursor - start), after = text.mid(cursor, next - cursor);
-        if (text.isEmpty())
-            lyrics->setText("BT Karaoke • Ready for lyrics");
-        else
-            lyrics->setText("<span style='color:" + lyricStyle.sung.name() + "'>" +
-                            before.toHtmlEscaped().replace("\n", "<br>") +
-                            "</span><span style='color:" + lyricStyle.text.name() + "'>" +
-                            after.toHtmlEscaped().replace("\n", "<br>") + "</span>");
-    }
 }
 } // namespace bt

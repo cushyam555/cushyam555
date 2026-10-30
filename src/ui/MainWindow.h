@@ -1,6 +1,8 @@
 #pragma once
 #include "Appearance.h"
+#include "LyricCanvas.h"
 #include "audio/Engine.h"
+#include "core/SongImport.h"
 #include "core/SongLibrary.h"
 #include <QHash>
 #include <QJsonArray>
@@ -16,6 +18,7 @@ class QProcess;
 class QComboBox;
 class QCheckBox;
 class QSpinBox;
+class QTimer;
 namespace bt {
 class MainWindow final : public QMainWindow {
     std::shared_ptr<Engine> engineOwner = std::make_shared<Engine>();
@@ -36,7 +39,10 @@ class MainWindow final : public QMainWindow {
     QString projectPath;
     QListWidget *songs = nullptr, *queue = nullptr, *chain = nullptr, *pluginList = nullptr;
     QLabel *now = nullptr, *clock = nullptr, *status = nullptr, *cpu = nullptr,
-           *chainTitle = nullptr, *lyrics = nullptr;
+           *chainTitle = nullptr;
+    LyricCanvas *lyrics = nullptr;
+    QTimer *refreshTimer = nullptr;
+    QSpinBox *keyControl = nullptr, *tempoControl = nullptr;
     QSlider *seek = nullptr;
     QStackedWidget *pages = nullptr;
     QWidget *stage = nullptr;
@@ -48,9 +54,14 @@ class MainWindow final : public QMainWindow {
     std::array<QSlider *, PartCount> sendControls{};
     std::vector<QLabel *> fxSummaries;
     QCheckBox *melodyMute = nullptr;
-    QSpinBox *melodyChannelControl = nullptr;
+
     void importSongs();
     void importPaths(const QStringList &paths);
+    void runImport(const QStringList &paths, bool copy);
+    bool chooseStorage();
+    void applyPerformance();
+    void syncLyrics();
+    bool eventFilter(QObject *, QEvent *) override;
     void importFolder();
     void manageNcn();
     void scanNcn(const QString &root, bool copy);
@@ -81,6 +92,8 @@ class MainWindow final : public QMainWindow {
     ~MainWindow() override;
     bool smokeReady() const;
     bool verifyMixerUi();
+    bool verifyControlsUi();
+    bool verifyImportUi();
     bool startupSettled() const;
     void selectPage(int index);
     void previewSettings();

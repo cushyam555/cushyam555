@@ -20,7 +20,8 @@ struct Engine::Impl {
     MidiOutput midi;
     OutputMode outputMode = OutputMode::Internal;
     bool melodyOff = false;
-    int melody = 3;
+    int melody = 8;
+    int maxVoices = 128;
     std::vector<std::array<float, 512>> buses;
     std::array<int, 16> programs{}, pitch{};
     std::array<std::array<int, 128>, 16> controllers{};
@@ -340,7 +341,7 @@ void Engine::loadSoundfont(const QString &path) {
             tsf_close(font);
             throw std::runtime_error("Insufficient memory for SoundFont");
         }
-        tsf_set_max_voices(copies[i], 128);
+        tsf_set_max_voices(copies[i], d->maxVoices);
         for (int ch = 0; ch < 16; ++ch)
             tsf_channel_set_presetnumber(copies[i], ch, i < DrumFirst ? i : 0, i >= DrumFirst);
     }
@@ -359,7 +360,7 @@ void Engine::loadSoundfont(const QString &path) {
         int index = tsf_get_presetindex(font, 0, p);
         QString name = index >= 0 ? QString::fromUtf8(tsf_get_presetname(font, index))
                                   : "Not present in bank 0";
-        d->presetLabels << QString("%1 • %2").arg(p + 1, 3, 10, QChar('0')).arg(name);
+        d->presetLabels << QString("%1 • %2").arg(p, 3, 10, QChar('0')).arg(name);
         strips[p].name = d->presetLabels.last();
     }
     d->resetChannels();
@@ -423,6 +424,7 @@ void Engine::seek(double seconds) {
 void Engine::setSpeed(double speed) {
     std::lock_guard<std::mutex> lock(mutex);
     d->speed = std::clamp(speed, .5, 1.5);
+    playbackSpeed = d->speed;
 }
 void Engine::setTranspose(int semitones) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -580,11 +582,36 @@ void Engine::closeMidiOutput() {
     d->midi.close();
     d->outputMode = OutputMode::Internal;
 }
-void Engine::setMelody(bool muted, int channel) {
+void Engine::setMelody(bool muted) {
     std::lock_guard<std::mutex> lock(mutex);
-    d->panic();
+    if (d->melodyOff == muted)
+        return;
+    d->melody = 8;
     d->melodyOff = muted;
-    d->melody = std::clamp(channel, 0, 15);
+    if (muted) {
+        for (int p = 0; p < PartCount; ++p)
+            if (d->synth[p])
+                tsf_channel_sounds_off_all(d->synth[p], 8);
+        for (int note = 0; note < 128; ++note) {
+            for (int p : d->held[8][note])
+                d->send(p, {0, 0, 0x88, note, 0});
+            d->held[8][note].clear();
+        }
+        d->midi.send({0, 0, 0xb8, 64, 0});
+        d->midi.send({0, 0, 0xb8, 123, 0});
+    }
+}
+void Engine::setPerformance(int profile) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const int voices[] = {64, 128, 256};
+    d->maxVoices = voices[std::clamp(profile, 0, 2)];
+    for (auto *s : d->synth)
+        if (s)
+            tsf_set_max_voices(s, d->maxVoices);
+}
+int Engine::voiceLimit() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return d->maxVoices;
 }
 bool Engine::melodyMuted() const {
     std::lock_guard<std::mutex> lock(mutex);
@@ -652,8 +679,13 @@ QJsonObject Engine::save() {
                                   {"send", s.fxSend},
                                   {"fx", effects}});
     }
-    return {{"schema", 3},      {"soundfont", d->sfPath},      {"song", song.path},
-            {"tracks", tracks}, {"melodyMuted", d->melodyOff}, {"melodyChannel", d->melody}};
+    return {{"schema", 3},
+            {"programBase", 0},
+            {"soundfont", d->sfPath},
+            {"song", song.path},
+            {"tracks", tracks},
+            {"melodyMuted", d->melodyOff},
+            {"melodyChannel", d->melody}};
 }
 std::shared_ptr<Effect> Engine::restoreEffect(const QJsonObject &o) {
     std::shared_ptr<Effect> f;
@@ -689,7 +721,7 @@ QStringList Engine::restore(const QJsonObject &o) {
         } catch (const std::exception &e) {
             warnings << e.what();
         }
-    setMelody(o["melodyMuted"].toBool(), o["melodyChannel"].toInt(3));
+    setMelody(o["melodyMuted"].toBool());
     auto tracks = o["tracks"].toArray();
     if (o["schema"].toInt() < 3) {
         auto legacy = tracks;
@@ -763,6 +795,17 @@ QStringList Engine::restore(const QJsonObject &o) {
             }
         std::lock_guard<std::mutex> lock(mutex);
         strips[i].name = t["name"].toString(partName(i));
+        if (i < ProgramCount && !o.contains("programBase")) {
+            auto prefix = QString("%1 • ").arg(i + 1, 3, 10, QChar('0'));
+            if (strips[i].name.startsWith(prefix))
+                strips[i].name =
+                    QString("%1 • ").arg(i, 3, 10, QChar('0')) + strips[i].name.mid(prefix.size());
+            auto suffix = QString("Program %1").arg(i + 1);
+            if (strips[i].name.endsWith(suffix)) {
+                strips[i].name.chop(suffix.size());
+                strips[i].name += QString("Program %1").arg(i, 3, 10, QChar('0'));
+            }
+        }
         strips[i].volume = std::clamp(t["volume"].toDouble(.8), 0., 1.5);
         strips[i].pan = std::clamp(t["pan"].toDouble(), -1., 1.);
         strips[i].mute = t["mute"].toBool();

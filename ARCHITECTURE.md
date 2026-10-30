@@ -1,4 +1,4 @@
-# BT Karaoke Studio 0.3 architecture
+# BT Karaoke Studio 0.4 architecture
 
 BT application code is independent of HandyKaraoke. Its legacy implementation is
 preserved only in a separate branch. Reference inspection of Handy's NCN behavior
@@ -50,10 +50,9 @@ hash preserves queue references while scans append/update songs. Imports use a
 SQLite transaction, with cancellation retaining successfully processed entries.
 The browser limits displayed results to 1,000; searches inspect the full metadata set.
 
-The managed NCN root defaults to AppData/NCN, with Song/Lyrics/Cursor directories.
-Folder import validates MIDI and companions, preserves relative paths, copies all
-three using QSaveFile and cleans up newly created files on failure. Existing targets
-with different contents are rejected. Registered external NCN roots can be indexed
+The song root is selected by the user outside app data/install directories, with Song/Lyrics/Cursor directories for NCN and KAR for KAR files.
+Folder import preflights/counts songs before changes, preserves relative paths, copies all
+three through staging and backup/promote/rollback. Existing targets prompt Skip or Overwrite. Registered external NCN roots can be indexed
 without copying and rescanned. Original source files are never removed.
 
 library.sqlite and plugin registry live under applicationDataPath(). QSettings keeps
@@ -97,3 +96,28 @@ the transport clock even for MIDI-only output, requiring a working audio device.
 There is no audio-to-loopMIDI conversion: audio FX, gain/pan and bus audio remain
 inside BT. No MIDI input, SysEx or MIDI Clock is claimed. An installed loopMIDI port
 and receiving application are required for real end-to-end validation.
+
+## 0.4 changes
+
+Program labels use the native 000–127 indexing; project `programBase: 0` distinguishes
+new names from the old automatic one-based prefix. Melody is permanently MIDI channel
+9 (zero-based 8). Muting only releases that channel's held notes rather than calling
+the global panic. Insert/Delete change key by one semitone, PageUp/PageDown change
+speed by one percent; text editing, modal dialogs and popups retain normal key handling.
+
+Import boundaries accept NCN triplets or KAR only. SongImport performs a read-only
+preflight and returns metadata/destination/conflict flags. The UI displays counts
+before writing, then requests Skip/Overwrite on conflicts, optionally for the remaining
+batch. Copying is restricted to user-selected paths outside application data/install
+folders. Existing older managed data is not moved or deleted. NCN replacement stages
+all new files, backs up old targets, promotes the set and restores on failure. Recovery
+backups remain available if restoration itself fails. SQLite still stores only metadata.
+
+LyricCanvas replaces rebuilding a full-song QLabel HTML string on each refresh. It
+precomputes timed text rows at song load, caches QTextLayout shaping/wrapping for the
+current pair of rows, and repaints a fractional highlight clip using QPainter CPU
+raster rendering. Line gap is independent of text height. Transport time interpolation
+uses a monotonic clock, follows speed and reanchors on pause/seek; paused text avoids
+redundant painting. Layout is recreated only on page/font/size changes. Profiles target
+30/60/120 lyric FPS, 10/25/40 mixer Hz and 64/128/256 sampler voices per program. Actual
+frame rate is host/display dependent; there is no new GPU driver initialization.

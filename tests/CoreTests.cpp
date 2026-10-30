@@ -1,8 +1,10 @@
 #include "audio/Engine.h"
 #include "core/Midi.h"
+#include "core/SongImport.h"
 #include "core/SongLibrary.h"
 #include "plugins/VstEffect.h"
 #include "ui/Appearance.h"
+#include "ui/LyricCanvas.h"
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -163,15 +165,15 @@ class CoreTests : public QObject {
         engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
         bt::Song song;
         song.duration = 2;
-        song.events = {{0, 0, 0x93, 60, 100}, {1, 480, 0x83, 60, 0}};
-        engine.setMelody(true, 3);
+        song.events = {{0, 0, 0x98, 60, 100}, {1, 480, 0x88, 60, 0}};
+        engine.setMelody(true);
         engine.load(song);
         engine.play();
         float b[512];
         engine.render(b, 256);
         for (auto v : b)
             QVERIFY(std::abs(v) < .000001f);
-        engine.setMelody(false, 3);
+        engine.setMelody(false);
         engine.seek(0);
         engine.play();
         engine.render(b, 256);
@@ -179,7 +181,7 @@ class CoreTests : public QObject {
         for (auto v : b)
             audible |= std::abs(v) > .00001f;
         QVERIFY(audible);
-        engine.setMelody(true, 3);
+        engine.setMelody(true);
         QVERIFY(engine.setRoute(3, bt::BusFirst + 2));
         engine.strips[3].fxSend = .37;
         engine.strips[bt::BusFirst + 2].fx.push_back(bt::builtin("Delay", 48000));
@@ -188,7 +190,7 @@ class CoreTests : public QObject {
         bt::Engine restored;
         QVERIFY(restored.restore(state).isEmpty());
         QVERIFY(restored.melodyMuted());
-        QCOMPARE(restored.melodyChannel(), 3);
+        QCOMPARE(restored.melodyChannel(), 8);
         QCOMPARE(restored.strips[3].output, bt::BusFirst + 2);
         QCOMPARE(restored.strips[3].fxSend, .37);
         QCOMPARE(restored.strips[bt::BusFirst + 2].fx.size(), size_t(1));
@@ -259,6 +261,18 @@ class CoreTests : public QObject {
         engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
         QCOMPARE(engine.presetNames().size(), 128);
         QVERIFY(engine.strips[0].name.contains("BT Test"));
+        QVERIFY(engine.strips[0].name.startsWith("000"));
+        QVERIFY(engine.strips[127].name.startsWith("127"));
+        auto old = engine.save();
+        old.remove("programBase");
+        auto tracks = old["tracks"].toArray();
+        auto first = tracks[0].toObject();
+        first["name"] = "001 • BT Test";
+        tracks[0] = first;
+        old["tracks"] = tracks;
+        bt::Engine upgraded;
+        QVERIFY(upgraded.restore(old).isEmpty());
+        QVERIFY(upgraded.strips[0].name.startsWith("000"));
         QVERIFY(engine.strips[127].name.contains("Not present"));
         engine.testNote(127);
         float pcm[512];
@@ -329,6 +343,99 @@ class CoreTests : public QObject {
         QVERIFY(palette.color(QPalette::Window).lightnessF() < .2);
         QVERIFY(palette.color(QPalette::Text).lightnessF() > .7);
         QVERIFY(palette.color(QPalette::Base).lightnessF() < .2);
+    }
+    void smoothLyricsGapAndProfiles() {
+        bt::LyricCanvas canvas;
+        bt::LyricsStyle style;
+        style.lineGap = 72;
+        style.performance = 0;
+        canvas.setAppearance(style);
+        canvas.setSong({{0, "A"}, {1, "B\n"}, {2, "C"}, {3, "D"}}, 4);
+        QCOMPARE(canvas.lineCount(), 2);
+        QCOMPARE(canvas.lineGap(), 72);
+        QVERIFY(std::abs(canvas.progress(0, .25) - .25) < .001);
+        QVERIFY(std::abs(canvas.progress(0, .75) - .75) < .001);
+        QCOMPARE(canvas.frameInterval(), 33);
+        style.performance = 2;
+        canvas.setAppearance(style);
+        QCOMPARE(canvas.frameInterval(), 8);
+        bt::LyricsStyle restored;
+        restored.restore(style.save());
+        QCOMPARE(restored.lineGap, 72);
+        QCOMPARE(restored.performance, 2);
+        bt::Engine engine;
+        engine.setPerformance(0);
+        QCOMPARE(engine.voiceLimit(), 64);
+        engine.setPerformance(1);
+        QCOMPARE(engine.voiceLimit(), 128);
+        engine.setPerformance(2);
+        QCOMPARE(engine.voiceLimit(), 256);
+        canvas.resize(800, 500);
+        canvas.setPosition(2.5);
+        QPixmap image(canvas.size());
+        canvas.render(&image);
+        QVERIFY(!image.isNull());
+    }
+    void importAnalysisAndExplicitOverwrite() {
+        QTemporaryDir source, destination;
+        auto file = source.path() + "/test.kar";
+        auto write = [](const QString &path, const QByteArray &data) {
+            QFile f(path);
+            return f.open(QFile::WriteOnly) && f.write(data) == data.size();
+        };
+        QVERIFY(write(file, midi()));
+        auto target = destination.path() + "/songs";
+        auto plan = bt::analyzeImport({file, file}, target, true);
+        QCOMPARE(plan.items.size(), 1);
+        QCOMPARE(plan.duplicates, 0);
+        QVERIFY(plan.errors.isEmpty());
+        QVERIFY(!QFileInfo::exists(target));
+        auto stored = bt::SongLibrary::copyKar(file, plan.items[0].destination);
+        QVERIFY(write(file, midi() + "updated"));
+        plan = bt::analyzeImport({file}, target, true);
+        QCOMPARE(plan.duplicates, 1);
+        QVERIFY_EXCEPTION_THROWN(bt::SongLibrary::copyKar(file, stored), std::runtime_error);
+        bt::SongLibrary::copyKar(file, stored, true);
+        QFile copied(stored);
+        QVERIFY(copied.open(QFile::ReadOnly));
+        QCOMPARE(copied.readAll(), midi() + "updated");
+        auto plain = source.path() + "/standalone.mid";
+        QVERIFY(write(plain, midi()));
+        QVERIFY(!bt::supportedSong(plain));
+        QVERIFY(bt::supportedSong(file));
+        auto bad = bt::analyzeImport({plain}, target, true);
+        QVERIFY(bad.items.isEmpty());
+        QCOMPARE(bad.errors.size(), 1);
+        auto canceled = bt::analyzeImport({file}, target, true, [](int, int) { return false; });
+        QVERIFY(canceled.items.isEmpty());
+        QVERIFY(!bt::songStorageAllowed(destination.path() + "/DATA/Songs",
+                                        destination.path() + "/DATA"));
+        QVERIFY(
+            bt::songStorageAllowed(destination.path() + "/Music", destination.path() + "/DATA"));
+    }
+    void lockedCh9DoesNotCutOtherChannels() {
+        bt::Engine engine;
+        engine.loadSoundfont(QFINDTESTDATA("test-tone.sf2"));
+        bt::Song song;
+        song.duration = 2;
+        song.events = {{0, 0, 0x90, 60, 100}, {0, 0, 0x98, 64, 100}};
+        engine.load(song);
+        engine.play();
+        float pcm[512];
+        engine.render(pcm, 256);
+        engine.setMelody(true);
+        QCOMPARE(engine.melodyChannel(), 8);
+        engine.render(pcm, 256);
+        bool audible = false;
+        for (auto value : pcm)
+            audible |= std::abs(value) > .00001f;
+        QVERIFY(audible); // the non-melody channel continues its held note
+        auto state = engine.save();
+        state["melodyChannel"] = 3;
+        state["song"] = QString();
+        bt::Engine restored;
+        QVERIFY(restored.restore(state).isEmpty());
+        QCOMPARE(restored.melodyChannel(), 8);
     }
     void arbitraryChains() {
         bt::Engine engine;

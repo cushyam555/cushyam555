@@ -336,6 +336,6 @@ QString partName(int p) {
                          "Ensemble", "Brass", "Reed", "Pipe", "Synth lead", "Synth pad",
                          "Synth effects", "Ethnic", "Percussive", "Sound effects"}
                  .at(p / 8))
-        .arg(p + 1);
+        .arg(p, 3, 10, QChar('0'));
 }
 } // namespace bt

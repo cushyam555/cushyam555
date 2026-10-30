@@ -13,7 +13,7 @@
 int main(int argc, char **argv) {
     QCoreApplication::setApplicationName("BT Karaoke");
     QCoreApplication::setOrganizationName("BT Studio");
-    QCoreApplication::setApplicationVersion("0.3.0");
+    QCoreApplication::setApplicationVersion("0.4.0");
     bt::installStartupLog();
     try {
         bool probe = false;
@@ -47,7 +47,8 @@ int main(int argc, char **argv) {
                 std::fwrite(json.constData(), 1, size_t(json.size()), stdout);
             return 0;
         }
-        const bool smoke = args.contains("--smoke-test") || args.contains("--mixer-ui-test"),
+        const bool smoke = args.contains("--smoke-test") || args.contains("--mixer-ui-test") ||
+                           args.contains("--controls-ui-test") || args.contains("--import-ui-test"),
                    startup = args.contains("--startup-test");
         const bool safe = args.contains("--safe-mode") || smoke;
         QTemporaryDir testData;
@@ -69,6 +70,8 @@ int main(int argc, char **argv) {
         if (smoke)
             QTimer::singleShot(400, &app, [&] {
                 bool ready = (!args.contains("--mixer-ui-test") || w.verifyMixerUi()) &&
+                             (!args.contains("--controls-ui-test") || w.verifyControlsUi()) &&
+                             (!args.contains("--import-ui-test") || w.verifyImportUi()) &&
                              w.isVisible() && w.smokeReady();
                 int shot = args.indexOf("--screenshot");
                 if (shot >= 0 && shot + 1 < args.size())

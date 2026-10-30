@@ -25,7 +25,7 @@ class Engine : public std::enable_shared_from_this<Engine> {
     mutable std::mutex mutex;
     std::vector<Strip> strips;
     std::deque<std::atomic<float>> peaks;
-    std::atomic<double> position{0}, cpu{0};
+    std::atomic<double> position{0}, cpu{0}, playbackSpeed{1};
     std::atomic<bool> playing{false};
     std::atomic<int> droppedBlocks{0};
     Song song;
@@ -33,7 +33,9 @@ class Engine : public std::enable_shared_from_this<Engine> {
     void setOutputMode(OutputMode mode);
     bool openMidiOutput(int port, QString &error);
     void closeMidiOutput();
-    void setMelody(bool muted, int channel);
+    void setMelody(bool muted);
+    void setPerformance(int profile);
+    int voiceLimit() const;
     void panic();
     bool melodyMuted() const;
     int melodyChannel() const;

@@ -27,9 +27,11 @@ void applyDarkPalette(QApplication &app) {
     app.setPalette(p);
 }
 QJsonObject LyricsStyle::save() const {
-    return {{"font", font.toString()}, {"background", background.name()}, {"text", text.name()},
-            {"sung", sung.name()},     {"alignment", alignment},          {"margin", margin},
-            {"offset", offset}};
+    return {{"font", font.toString()},   {"background", background.name()},
+            {"text", text.name()},       {"sung", sung.name()},
+            {"alignment", alignment},    {"margin", margin},
+            {"offset", offset},          {"lineGap", lineGap},
+            {"performance", performance}};
 }
 void LyricsStyle::restore(const QJsonObject &o) {
     QFont candidate;
@@ -46,6 +48,8 @@ void LyricsStyle::restore(const QJsonObject &o) {
     color("sung", sung);
     alignment = std::clamp(o["alignment"].toInt(1), 0, 2);
     margin = std::clamp(o["margin"].toInt(40), 0, 120);
+    lineGap = std::clamp(o["lineGap"].toInt(40), 0, 200);
+    performance = std::clamp(o["performance"].toInt(1), 0, 2);
     offset = std::clamp(o["offset"].toDouble(), -5., 5.);
 }
 void LyricsStyle::apply(QLabel *label, QWidget *surface) const {
