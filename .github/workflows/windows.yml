@@ -27,6 +27,13 @@ jobs:
             ./packaging/build-windows.ps1 *>&1 | Tee-Object -FilePath build-windows-output.txt
           } catch {
             $_ | Out-String | Tee-Object -FilePath build-windows-output.txt -Append | Write-Host
+            $diagnostics = (Get-Content build-windows-output.txt -Tail 35 | Out-String)
+            if (Test-Path build-windows-tests/results.txt) {
+              $diagnostics = (Get-Content build-windows-tests/results.txt | Out-String) + $diagnostics
+            }
+            if ($diagnostics.Length -gt 14000) { $diagnostics = $diagnostics.Substring($diagnostics.Length - 14000) }
+            $diagnostics = $diagnostics.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=BT Karaoke Windows diagnostics::$diagnostics"
             exit 1
           }
       - name: Summarize validation
