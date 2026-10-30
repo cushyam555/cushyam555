@@ -57,7 +57,7 @@ try {
 } finally { Rename-Item dist/Qt6Core.dll.unavailable Qt6Core.dll }
 
 Run "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" @('packaging/bt.iss')
-$setup = Get-Item installer-output/BTKaraoke-0.4.0-Windows-x64-setup.exe
+$setup = Get-Item installer-output/BTKaraoke-0.4.1-Windows-x64-setup.exe
 $install = Join-Path $env:RUNNER_TEMP ('BT-Studio-' + [guid]::NewGuid().ToString('N'))
 $p = Start-Process $setup.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$install`"") -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw 'Installer failed' }

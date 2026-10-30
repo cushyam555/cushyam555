@@ -8,6 +8,7 @@
 #include <QtWidgets>
 #include <algorithm>
 #include <cmath>
+#include <thread>
 namespace bt {
 QString theme() {
     return R"(
@@ -55,14 +56,105 @@ QString registry() {
 void error(QWidget *w, const std::exception &e) {
     QMessageBox::warning(w, "BT Karaoke", QString::fromUtf8(e.what()));
 }
+struct LibraryJob {
+    std::atomic<bool> cancel{false}, done{false};
+    std::atomic<int> position{0}, total{0};
+    std::mutex mutex;
+    QString file, error;
+    DatabaseScan scan;
+    bool success = false;
+    bool progress(int value, int maximum, const QString &path) {
+        position = value;
+        total = maximum;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            file = path;
+        }
+        return !cancel;
+    }
+};
+bool libraryTask(QWidget *parent, QProgressBar *bar, QLabel *file,
+                 const std::function<bool(LibraryJob &)> &work, DatabaseScan *result = nullptr) {
+    auto job = std::make_shared<LibraryJob>();
+    QProgressDialog busy("กำลังปรับปรุงฐานข้อมูลเพลง…", "ยกเลิก", 0, 0, parent);
+    busy.setWindowModality(Qt::ApplicationModal);
+    busy.setMinimumDuration(0);
+    busy.setAutoClose(false);
+    busy.setAutoReset(false);
+    QEventLoop loop;
+    QObject::connect(&busy, &QProgressDialog::canceled, &loop, [job] { job->cancel = true; });
+    std::thread worker;
+    try {
+        worker = std::thread([job, work] {
+            try {
+                job->success = work(*job);
+            } catch (const std::exception &e) {
+                job->error = QString::fromUtf8(e.what());
+            } catch (...) {
+                job->error = "ไม่สามารถปรับปรุงฐานข้อมูลได้";
+            }
+            job->done = true;
+        });
+    } catch (const std::exception &e) {
+        error(parent, e);
+        return false;
+    }
+    QTimer poll;
+    poll.setInterval(30);
+    QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (busy.wasCanceled())
+            job->cancel = true;
+        int total = job->total.load(), position = job->position.load();
+        bar->setRange(0, total);
+        bar->setValue(position);
+        QString name;
+        {
+            std::lock_guard<std::mutex> lock(job->mutex);
+            name = job->file;
+        }
+        file->setText(name.isEmpty() ? QString("กำลังนับเพลง…") : QFileInfo(name).fileName());
+        file->setToolTip(name);
+        busy.setLabelText(file->text());
+        if (job->done)
+            loop.quit();
+    });
+    poll.start();
+    loop.exec();
+    poll.stop();
+    worker.join();
+    busy.close();
+    bar->setRange(0, 100);
+    bar->setValue(job->success ? 100 : 0);
+    if (!job->error.isEmpty() && !job->cancel)
+        QMessageBox::warning(parent, "ฐานข้อมูลเพลง", job->error);
+    if (!job->success) {
+        file->setText(job->cancel ? "ยกเลิกแล้ว — ฐานข้อมูลเดิมยังอยู่" : "ไม่สำเร็จ — ฐานข้อมูลเดิมยังอยู่");
+        return false;
+    }
+    if (result)
+        *result = std::move(job->scan);
+    return true;
+}
 } // namespace
 MainWindow::MainWindow(bool offline) {
-    setWindowTitle("BT Karaoke • Studio 0.4");
+    setWindowTitle("BT Karaoke • Studio 0.4.1");
     QSettings preferences;
     storageRoot = preferences.value("NCN/storage").toString();
     if (!songStorageAllowed(storageRoot, applicationDataPath()))
         storageRoot.clear();
     ncnRoots = preferences.value("NCN/roots").toStringList();
+    ncnDatabaseRoot = preferences.value("database/NCN").toString();
+    karDatabaseRoot = preferences.value("database/KAR").toString();
+    if (ncnDatabaseRoot.isEmpty()) {
+        if (validNcnRoot(storageRoot))
+            ncnDatabaseRoot = storageRoot;
+        else
+            for (const auto &root : ncnRoots)
+                if (validNcnRoot(root)) {
+                    ncnDatabaseRoot = root;
+                    break;
+                }
+    }
     lyricStyle.restore(
         QJsonDocument::fromJson(preferences.value("lyrics/style").toByteArray()).object());
 
@@ -160,9 +252,9 @@ MainWindow::MainWindow(bool offline) {
     auto *libButtons = new QHBoxLayout;
     left->addLayout(libButtons);
     button(
-        "＋ เพิ่มเพลง NCN / KAR", libButtons, [this] { importSongs(); }, this)
+        "＋ เพิ่มเพลง / ฐานข้อมูล", libButtons, [this] { manageNcn(); }, this)
         ->setObjectName("primary");
-    button("คลัง NCN…", libButtons, [this] { manageNcn(); }, this);
+
     button(
         "Add to queue", libButtons,
         [this] {
@@ -477,6 +569,79 @@ bool MainWindow::verifyImportUi() {
     return read() == bytes + "updated" && decisions == 5 && library.size() == 1 &&
            songStorageAllowed(target, applicationDataPath());
 }
+bool MainWindow::verifyDatabaseUi() {
+    QTemporaryDir fixture;
+    QByteArray track = QByteArray::fromHex("00903c648360803c0000ff2f00");
+    QByteArray midi = QByteArray::fromHex("4d546864000000060000000101e04d54726b");
+    for (int i = 24; i >= 0; i -= 8)
+        midi.append(char(track.size() >> i));
+    midi += track;
+    auto ncn = fixture.path() + "/NCN", kar = fixture.path() + "/KAR";
+    for (const auto &dir : {ncn + "/Song", ncn + "/Lyrics", ncn + "/Cursor", kar})
+        if (!QDir().mkpath(dir))
+            return false;
+    auto write = [](const QString &path, const QByteArray &bytes) {
+        QFile f(path);
+        return f.open(QFile::WriteOnly) && f.write(bytes) == bytes.size();
+    };
+    auto song = kar + "/test.kar", old = fixture.path() + "/old.kar";
+    if (!write(ncn + "/Song/001.mid", midi) ||
+        !write(ncn + "/Lyrics/001.lyr", "Title\nArtist\nC\n\nAB") ||
+        !write(ncn + "/Cursor/001.cur", QByteArray::fromHex("00001800")) || !write(song, midi) ||
+        !write(old, midi))
+        return false;
+    rememberSong(readSong(old));
+    rememberSong(readSong(song));
+    for (int i = 0; i < library.size(); ++i) {
+        auto *entry = new QListWidgetItem(library[i].title, queue);
+        entry->setData(Qt::UserRole, i);
+    }
+    ncnDatabaseRoot = ncn;
+    karDatabaseRoot = kar;
+    bool started = false, good = false;
+    QTimer responder;
+    responder.setInterval(15);
+    connect(&responder, &QTimer::timeout, this, [&] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            if (box->windowTitle() == "ผลวิเคราะห์ฐานข้อมูลเพลง")
+                for (auto *b : box->buttons())
+                    if (b->text() == "เริ่มปรับปรุง") {
+                        b->click();
+                        break;
+                    }
+            return;
+        }
+        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (!dialog || dialog->objectName() != "songDatabaseDialog")
+            return;
+        auto *button = dialog->findChild<QPushButton *>("updateSongDatabase");
+        if (!started) {
+            started = true;
+            QTimer::singleShot(0, button, [button] { button->click(); });
+            return;
+        }
+        if (!button->isEnabled())
+            return;
+        auto *ncnField = dialog->findChild<QLineEdit *>("ncnDatabasePath"),
+             *karField = dialog->findChild<QLineEdit *>("karDatabasePath");
+        auto *bar = dialog->findChild<QProgressBar *>("databaseProgress");
+        good = library.size() == 2 && queue->count() == 1 && bar->value() == 100 &&
+               ncnField->text() == ncn && karField->text() == kar;
+        if (good) {
+            int row = queue->item(0)->data(Qt::UserRole).toInt();
+            good = row >= 0 && row < library.size() && library[row].path == song;
+        }
+        dialog->accept();
+    });
+    responder.start();
+    manageNcn();
+    responder.stop();
+    QFile unchanged(ncn + "/Song/001.mid");
+    if (!unchanged.open(QFile::ReadOnly))
+        return false;
+    return good && unchanged.readAll() == midi && QFileInfo::exists(old) &&
+           !QFileInfo::exists(applicationDataPath() + "/NCN");
+}
 bool MainWindow::verifyMixerUi() {
     int before = engine.trackCount();
     auto *add = findChild<QPushButton *>("addBusButton");
@@ -508,6 +673,8 @@ void MainWindow::importSongs() {
 }
 void MainWindow::savePreferences() {
     QSettings settings;
+    settings.setValue("database/NCN", ncnDatabaseRoot);
+    settings.setValue("database/KAR", karDatabaseRoot);
     settings.setValue("NCN/storage", storageRoot);
     settings.setValue("NCN/roots", ncnRoots);
     settings.setValue("lyrics/style",
@@ -533,8 +700,8 @@ bool MainWindow::rememberSong(Song song) {
     if (!songStore)
         throw std::runtime_error("Song library database is unavailable");
     songStore->put(song);
-    song.events.clear();
-    song.lyrics.clear();
+    QVector<MidiEvent>().swap(song.events);
+    QVector<Lyric>().swap(song.lyrics);
     auto key = songKey(song.path);
     int index = libraryMap.value(key, -1);
     if (index >= 0) {
@@ -545,76 +712,227 @@ bool MainWindow::rememberSong(Song song) {
     library.push_back(std::move(song));
     return true;
 }
-void MainWindow::importFolder() {
-    auto folder =
-        QFileDialog::getExistingDirectory(this, "เลือกโฟลเดอร์ NCN ที่มี Song / Lyrics / Cursor");
-    if (!folder.isEmpty())
-        scanNcn(folder, true);
-}
 void MainWindow::manageNcn() {
     QDialog dialog(this);
-    dialog.setWindowTitle("คลังเพลง NCN");
-    dialog.resize(650, 400);
+    dialog.setWindowTitle("ฐานข้อมูลเพลง");
+    dialog.setObjectName("songDatabaseDialog");
+    dialog.resize(760, 440);
     auto *layout = new QVBoxLayout(&dialog);
-    auto *intro = new QLabel("เพิ่มเพลง → อ่านรหัส/ชื่อ/ศิลปินลงฐานข้อมูล → ค้นหาและเข้าคิว\n"
-                             "เพลงอยู่ในโฟลเดอร์ที่คุณเลือกนอกข้อมูลแอป และจำคลังไว้หลังปิดโปรแกรม");
-    intro->setWordWrap(true);
-    layout->addWidget(intro);
-    auto *path =
-        new QLabel("ที่เก็บเพลง: " + (storageRoot.isEmpty() ? QString("ยังไม่ได้เลือก")
-                                                         : QDir::toNativeSeparators(storageRoot)));
-    path->setWordWrap(true);
-    path->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(path);
-    button("เพิ่มไฟล์เพลง NCN / KAR…", layout, [this] { importSongs(); }, &dialog);
-    button("นำเข้าชุด NCN จากโฟลเดอร์…", layout, [this] { importFolder(); }, &dialog);
-    button(
-        "เลือกโฟลเดอร์ NCN ที่มีอยู่และอัปเดตคลัง…", layout,
-        [this] {
-            auto root =
-                QFileDialog::getExistingDirectory(this, "เลือกที่เก็บ NCN (Song / Lyrics / Cursor)");
-            if (root.isEmpty())
-                return;
-            if (ncnSongFolder(root).isEmpty()) {
-                QMessageBox::warning(this, "NCN", "ไม่พบโฟลเดอร์ Song");
-                return;
-            }
-            if (!ncnRoots.contains(root))
-                ncnRoots << root;
-            savePreferences();
-            scanNcn(root, false);
-        },
-        &dialog);
-    button(
-        "อัปเดตคลังเพลงจากที่เก็บทั้งหมด", layout,
-        [this] {
-            scanNcn(storageRoot, false);
-            for (const auto &root : ncnRoots)
-                if (QDir(root).exists())
-                    scanNcn(root, false);
-        },
-        &dialog);
-    button(
-        "เปิดที่เก็บ NCN", layout,
-        [this] {
-            if (chooseStorage())
-                QDesktopServices::openUrl(QUrl::fromLocalFile(storageRoot));
-        },
-        &dialog);
-    button(
-        "เปลี่ยนที่เก็บ NCN สำหรับเพลงที่นำเข้าใหม่…", layout,
-        [this, path] {
-            storageRoot.clear();
-            if (chooseStorage())
-                path->setText("ที่เก็บเพลง: " + QDir::toNativeSeparators(storageRoot));
-        },
-        &dialog);
-    auto *note = new QLabel("การเปลี่ยนที่เก็บไม่ย้ายหรือลบเพลงเดิม และไม่ลบไฟล์ต้นฉบับ\n"
-                            "ค้นหาได้ด้วยรหัสเพลง ชื่อเพลง ศิลปิน หรือคีย์เพลง");
-    note->setWordWrap(true);
-    layout->addWidget(note);
-    button("ปิด", layout, [&dialog] { dialog.accept(); }, &dialog);
+    auto *locations = new QGroupBox("ที่เก็บเพลง");
+    auto *grid = new QGridLayout(locations);
+    layout->addWidget(locations);
+    auto *ncn = new QLineEdit(ncnDatabaseRoot), *kar = new QLineEdit(karDatabaseRoot);
+    ncn->setObjectName("ncnDatabasePath");
+    kar->setObjectName("karDatabasePath");
+    ncn->setReadOnly(true);
+    kar->setReadOnly(true);
+    ncn->setPlaceholderText("เลือกโฟลเดอร์ที่มี Song / Lyrics / Cursor");
+    kar->setPlaceholderText("เลือกโฟลเดอร์เพลง KAR");
+    auto *pickNcn = new QPushButton("…"), *pickKar = new QPushButton("…");
+    pickNcn->setObjectName("selectNcnPath");
+    pickKar->setObjectName("selectKarPath");
+    grid->addWidget(new QLabel("NCN :"), 0, 0);
+    grid->addWidget(ncn, 0, 1);
+    grid->addWidget(pickNcn, 0, 2);
+    grid->addWidget(new QLabel("KAR :"), 1, 0);
+    grid->addWidget(kar, 1, 1);
+    grid->addWidget(pickKar, 1, 2);
+    auto choose = [this, &dialog](QLineEdit *edit, bool isNcn) {
+        auto path = QFileDialog::getExistingDirectory(
+            &dialog, isNcn ? "เลือกที่เก็บไฟล์เพลง NCN" : "เลือกที่เก็บไฟล์เพลง KAR", edit->text());
+        if (path.isEmpty())
+            return;
+        if (!songStorageAllowed(path, applicationDataPath()) ||
+            !songStorageAllowed(path, QCoreApplication::applicationDirPath())) {
+            QMessageBox::warning(&dialog, "ที่เก็บเพลง",
+                                 "เลือกโฟลเดอร์เพลงนอกข้อมูลและโฟลเดอร์ติดตั้ง BT Karaoke");
+            return;
+        }
+        if (isNcn && !validNcnRoot(path)) {
+            QMessageBox::warning(&dialog, "ที่เก็บเพลงไม่ถูกต้อง",
+                                 "ต้องมีโฟลเดอร์ Song, Lyrics และ Cursor อยู่ในที่เก็บ NCN");
+            return;
+        }
+        edit->setText(path);
+        if (isNcn)
+            ncnDatabaseRoot = path;
+        else
+            karDatabaseRoot = path;
+        savePreferences();
+    };
+    connect(pickNcn, &QPushButton::clicked, &dialog, [=] { choose(ncn, true); });
+    connect(pickKar, &QPushButton::clicked, &dialog, [=] { choose(kar, false); });
+    auto *group = new QGroupBox("ปรับปรุงฐานข้อมูลเพลง");
+    auto *updates = new QVBoxLayout(group);
+    layout->addWidget(group);
+    auto *progress = new QProgressBar;
+    progress->setObjectName("databaseProgress");
+    progress->setRange(0, 100);
+    progress->setValue(0);
+    progress->setTextVisible(true);
+    progress->setFormat("%v / %m (%p%)");
+    progress->setStyleSheet(
+        "QProgressBar {color:#e8ecf6;min-height:24px;border:1px solid #34425e;border-radius:4px;} "
+        "QProgressBar::chunk {background:#51499c;}");
+    auto *line = new QHBoxLayout;
+    line->addWidget(new QLabel("ความคืบหน้า :"));
+    line->addWidget(progress, 1);
+    updates->addLayout(line);
+    auto *file = new QLabel("พร้อมปรับปรุงฐานข้อมูล");
+    file->setObjectName("databaseCurrentFile");
+    file->setWordWrap(true);
+    updates->addWidget(file);
+    auto *update = new QPushButton("ปรับปรุงฐานข้อมูล");
+    update->setObjectName("updateSongDatabase");
+    updates->addWidget(update);
+    auto *count = new QLabel(QString("จำนวนเพลงทั้งหมด : %1 เพลง").arg(library.size()));
+    count->setObjectName("databaseSongCount");
+    layout->addWidget(count);
+    auto *info =
+        new QLabel("เลือกที่เก็บ NCN / KAR แล้วกดปรับปรุง เพื่ออ่านเพลงเข้าฐานข้อมูล\nเพลงอยู่ในตำแหน่งเดิม "
+                   "โปรแกรมไม่คัดลอก ย้าย หรือแก้ไฟล์เพลงในขั้นตอนนี้");
+    info->setWordWrap(true);
+    layout->addWidget(info);
+    auto *more = new QToolButton;
+    more->setText("เครื่องมือเพิ่มเติม ▸");
+    more->setCheckable(true);
+    layout->addWidget(more);
+    auto *extras = new QWidget;
+    auto *extraLayout = new QVBoxLayout(extras);
+    button("คัดลอกไฟล์เพลงเพิ่มเติม…", extraLayout, [this] { importSongs(); }, &dialog);
+    extras->hide();
+    layout->addWidget(extras);
+    connect(more, &QToolButton::toggled, extras, &QWidget::setVisible);
+    auto *close = new QPushButton("ปิด");
+    layout->addWidget(close);
+    connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(update, &QPushButton::clicked, &dialog, [&, this] {
+        for (auto *b : {pickNcn, pickKar, update, close})
+            b->setEnabled(false);
+        more->setEnabled(false);
+        if (rebuildSongDatabase(ncn->text(), kar->text(), progress, file, &dialog))
+            count->setText(QString("จำนวนเพลงทั้งหมด : %1 เพลง").arg(library.size()));
+        for (auto *b : {pickNcn, pickKar, update, close})
+            b->setEnabled(true);
+        more->setEnabled(true);
+    });
     dialog.exec();
+}
+bool MainWindow::rebuildSongDatabase(const QString &ncn, const QString &kar, QProgressBar *progress,
+                                     QLabel *file, QWidget *parent) {
+    if (!songStore) {
+        QMessageBox::warning(parent, "ฐานข้อมูลเพลง", "ฐานข้อมูลไม่พร้อมใช้งาน");
+        return false;
+    }
+    DatabaseScan scanned;
+    if (!libraryTask(
+            parent, progress, file,
+            [ncn, kar](LibraryJob &job) {
+                job.scan = scanDatabase(ncn, kar, [&job](int done, int total, const QString &name) {
+                    return job.progress(done, total, name);
+                });
+                return !job.scan.canceled;
+            },
+            &scanned))
+        return false;
+    QMessageBox summary(parent);
+    summary.setWindowTitle("ผลวิเคราะห์ฐานข้อมูลเพลง");
+    int ncnCount = 0;
+    for (const auto &item : scanned.plan.items)
+        if (item.ncn)
+            ++ncnCount;
+    summary.setText(QString("พบไฟล์เพลง %1 ไฟล์\nอ่านได้: NCN %2 / KAR %3\nรหัสซ้ำ %4 รายการ / อ่านไม่ได้ "
+                            "%5 ไฟล์\n\nเมื่อเริ่ม ฐานข้อมูลจะมีเฉพาะเพลงจากที่เก็บที่เลือก ไฟล์เพลงยังอยู่ที่เดิม")
+                        .arg(scanned.discovered)
+                        .arg(ncnCount)
+                        .arg(scanned.plan.items.size() - ncnCount)
+                        .arg(scanned.plan.duplicates)
+                        .arg(scanned.plan.errors.size()));
+    summary.setDetailedText(scanned.plan.errors.mid(0, 30).join('\n'));
+    auto *start = summary.addButton("เริ่มปรับปรุง", QMessageBox::AcceptRole);
+    summary.addButton(QMessageBox::Cancel);
+    summary.exec();
+    if (summary.clickedButton() != start) {
+        file->setText("ยกเลิกแล้ว — ฐานข้อมูลเดิมยังอยู่");
+        return false;
+    }
+    QVector<Song> accepted;
+    QHash<QString, int> keys;
+    int all = 0, skipped = 0;
+    for (const auto &item : scanned.plan.items) {
+        auto key = databaseSongKey(item);
+        int existing = keys.value(key, -1);
+        if (existing >= 0) {
+            int choice = all;
+            if (!choice) {
+                QMessageBox question(parent);
+                question.setWindowTitle("พบรหัสเพลงซ้ำ");
+                question.setText(item.song.id + " • " + item.song.title);
+                question.setInformativeText(
+                    "เลือกข้าม หรือใช้รายการนี้ทับรายการรหัสเดียวกันในฐานข้อมูล (ไม่แก้ไฟล์เพลง)");
+                question.setDetailedText("รายการก่อนหน้า: " + accepted[existing].path +
+                                         "\nรายการนี้: " + item.song.path);
+                auto *skip = question.addButton("ข้าม", QMessageBox::RejectRole),
+                     *replace = question.addButton("ทับรายการ", QMessageBox::AcceptRole);
+                question.addButton(QMessageBox::Cancel);
+                auto *apply = new QCheckBox("ใช้กับรหัสซ้ำที่เหลือ");
+                question.setCheckBox(apply);
+                question.setDefaultButton(skip);
+                question.exec();
+                if (question.clickedButton() == skip)
+                    choice = 1;
+                else if (question.clickedButton() == replace)
+                    choice = 2;
+                else {
+                    file->setText("ยกเลิกแล้ว — ฐานข้อมูลเดิมยังอยู่");
+                    return false;
+                }
+                if (apply->isChecked())
+                    all = choice;
+            }
+            if (choice == 1) {
+                ++skipped;
+                continue;
+            }
+            accepted[existing] = item.song;
+        } else {
+            keys.insert(key, accepted.size());
+            accepted.push_back(item.song);
+        }
+    }
+    QStringList queued;
+    for (int i = 0; i < queue->count(); ++i) {
+        int row = queue->item(i)->data(Qt::UserRole).toInt();
+        if (row >= 0 && row < library.size())
+            queued << library[row].path;
+    }
+    const auto databaseFile = applicationDataPath() + "/library.sqlite";
+    if (!libraryTask(parent, progress, file, [accepted, databaseFile](LibraryJob &job) {
+            SongLibrary writer(databaseFile);
+            writer.replaceAll(accepted, [&job](int done, int total, const QString &name) {
+                return job.progress(done, total, name);
+            });
+            return true;
+        }))
+        return false;
+    ncnDatabaseRoot = ncn;
+    karDatabaseRoot = kar;
+    savePreferences();
+    reloadLibrary();
+    queue->clear();
+    for (const auto &path : queued) {
+        int index = libraryMap.value(songKey(path), -1);
+        if (index >= 0) {
+            auto *entry = new QListWidgetItem(library[index].title, queue);
+            entry->setData(Qt::UserRole, index);
+        }
+    }
+    file->setText(QString("ปรับปรุงเสร็จแล้ว %1 เพลง • ข้ามรหัสซ้ำ %2 • อ่านไม่ได้ %3")
+                      .arg(library.size())
+                      .arg(skipped)
+                      .arg(scanned.plan.errors.size()));
+    status->setText(file->text());
+    return true;
 }
 bool MainWindow::chooseStorage() {
     if (songStorageAllowed(storageRoot, applicationDataPath()) &&
@@ -634,31 +952,6 @@ bool MainWindow::chooseStorage() {
     storageRoot = root;
     savePreferences();
     return true;
-}
-void MainWindow::scanNcn(const QString &root, bool copy) {
-    auto folder = ncnSongFolder(root);
-    if (folder.isEmpty()) {
-        QMessageBox::warning(this, "NCN", "ไม่พบโฟลเดอร์ Song");
-        return;
-    }
-    QStringList files;
-    QProgressDialog scanning("กำลังนับไฟล์เพลง…", "ยกเลิก", 0, 0, this);
-    scanning.setWindowModality(Qt::ApplicationModal);
-    QDirIterator it(folder, QDir::Files, QDirIterator::Subdirectories);
-    int examined = 0;
-    while (it.hasNext()) {
-        auto path = it.next();
-        auto ext = QFileInfo(path).suffix().toLower();
-        if (ext == "mid" || ext == "midi" || ext == "kar")
-            files << path;
-        if (++examined % 100 == 0) {
-            QApplication::processEvents();
-            if (scanning.wasCanceled())
-                return;
-        }
-    }
-    scanning.close();
-    runImport(files, copy);
 }
 void MainWindow::importPaths(const QStringList &paths) {
     runImport(paths, true);
@@ -1423,8 +1716,8 @@ void MainWindow::openProject() {
                 auto s = readSong(v.toString());
                 mapping.push_back(library.size());
                 libraryMap.insert(songKey(s.path), library.size());
-                s.events.clear();
-                s.lyrics.clear();
+                QVector<MidiEvent>().swap(s.events);
+                QVector<Lyric>().swap(s.lyrics);
                 library.push_back(s);
             } catch (const std::exception &e) {
                 mapping.push_back(-1);
@@ -1536,6 +1829,9 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         }
     }
     return QMainWindow::eventFilter(object, event);
+}
+void MainWindow::previewDatabase() {
+    manageNcn();
 }
 void MainWindow::previewSettings() {
     lyricsSettings();

@@ -13,7 +13,7 @@
 int main(int argc, char **argv) {
     QCoreApplication::setApplicationName("BT Karaoke");
     QCoreApplication::setOrganizationName("BT Studio");
-    QCoreApplication::setApplicationVersion("0.4.0");
+    QCoreApplication::setApplicationVersion("0.4.1");
     bt::installStartupLog();
     try {
         bool probe = false;
@@ -48,7 +48,8 @@ int main(int argc, char **argv) {
             return 0;
         }
         const bool smoke = args.contains("--smoke-test") || args.contains("--mixer-ui-test") ||
-                           args.contains("--controls-ui-test") || args.contains("--import-ui-test"),
+                           args.contains("--controls-ui-test") ||
+                           args.contains("--import-ui-test") || args.contains("--database-ui-test"),
                    startup = args.contains("--startup-test");
         const bool safe = args.contains("--safe-mode") || smoke;
         QTemporaryDir testData;
@@ -66,16 +67,21 @@ int main(int argc, char **argv) {
         w.show();
         if (args.contains("--settings-preview"))
             QTimer::singleShot(0, &w, [&] { w.previewSettings(); });
+        if (args.contains("--database-preview"))
+            QTimer::singleShot(0, &w, [&] { w.previewDatabase(); });
         bt::startupLog("BT_WINDOW_SHOWN");
         if (smoke)
             QTimer::singleShot(400, &app, [&] {
                 bool ready = (!args.contains("--mixer-ui-test") || w.verifyMixerUi()) &&
                              (!args.contains("--controls-ui-test") || w.verifyControlsUi()) &&
                              (!args.contains("--import-ui-test") || w.verifyImportUi()) &&
+                             (!args.contains("--database-ui-test") || w.verifyDatabaseUi()) &&
                              w.isVisible() && w.smokeReady();
                 int shot = args.indexOf("--screenshot");
                 if (shot >= 0 && shot + 1 < args.size())
-                    ready = (args.contains("--settings-preview") && app.activeModalWidget()
+                    ready = ((args.contains("--settings-preview") ||
+                              args.contains("--database-preview")) &&
+                                     app.activeModalWidget()
                                  ? app.activeModalWidget()->grab()
                                  : w.grab())
                                 .save(args[shot + 1]) &&

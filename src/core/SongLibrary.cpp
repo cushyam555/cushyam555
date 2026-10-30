@@ -106,6 +106,26 @@ QVector<Song> SongLibrary::entries() const {
     }
     return songs;
 }
+void SongLibrary::replaceAll(const QVector<Song> &songs,
+                             const std::function<bool(int, int, const QString &)> &progress) {
+    beginBatch();
+    try {
+        QSqlQuery clear(database);
+        if (!clear.exec("DELETE FROM songs"))
+            throw std::runtime_error(clear.lastError().text().toUtf8().constData());
+        for (int i = 0; i < songs.size(); ++i) {
+            if (progress && !progress(i, songs.size(), songs[i].path))
+                throw std::runtime_error("ยกเลิกการปรับปรุงฐานข้อมูล");
+            put(songs[i]);
+        }
+        if (progress && !progress(songs.size(), songs.size(), QString()))
+            throw std::runtime_error("ยกเลิกการปรับปรุงฐานข้อมูล");
+        endBatch();
+    } catch (...) {
+        database.rollback();
+        throw;
+    }
+}
 void SongLibrary::removeMissing() {
     auto songs = entries();
     for (const auto &s : songs)

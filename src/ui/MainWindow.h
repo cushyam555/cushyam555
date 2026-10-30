@@ -2,6 +2,7 @@
 #include "Appearance.h"
 #include "LyricCanvas.h"
 #include "audio/Engine.h"
+#include "core/DatabaseScan.h"
 #include "core/SongImport.h"
 #include "core/SongLibrary.h"
 #include <QHash>
@@ -34,6 +35,7 @@ class MainWindow final : public QMainWindow {
     std::unique_ptr<SongLibrary> songStore;
     QString storageRoot;
     QStringList ncnRoots;
+    QString ncnDatabaseRoot, karDatabaseRoot;
     LyricsStyle lyricStyle;
     bool refreshing = false;
     QString projectPath;
@@ -62,9 +64,8 @@ class MainWindow final : public QMainWindow {
     void applyPerformance();
     void syncLyrics();
     bool eventFilter(QObject *, QEvent *) override;
-    void importFolder();
     void manageNcn();
-    void scanNcn(const QString &root, bool copy);
+    bool rebuildSongDatabase(const QString &, const QString &, QProgressBar *, QLabel *, QWidget *);
     void reloadLibrary();
     bool rememberSong(Song song);
     void rebuildMixer();
@@ -94,6 +95,8 @@ class MainWindow final : public QMainWindow {
     bool verifyMixerUi();
     bool verifyControlsUi();
     bool verifyImportUi();
+    bool verifyDatabaseUi();
+    void previewDatabase();
     bool startupSettled() const;
     void selectPage(int index);
     void previewSettings();

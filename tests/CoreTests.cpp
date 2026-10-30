@@ -1,4 +1,5 @@
 #include "audio/Engine.h"
+#include "core/DatabaseScan.h"
 #include "core/Midi.h"
 #include "core/SongImport.h"
 #include "core/SongLibrary.h"
@@ -441,6 +442,68 @@ class CoreTests : public QObject {
         bt::Engine restored;
         QVERIFY(restored.restore(state).isEmpty());
         QCOMPARE(restored.melodyChannel(), 8);
+    }
+    void databaseFolderScanDoesNotCopySongs() {
+        QTemporaryDir data;
+        auto root = data.path() + "/NCN", kar = data.path() + "/KAR";
+        for (const auto &dir : {root + "/Song/set", root + "/Lyrics/set", root + "/Cursor/set",
+                                kar + "/a", kar + "/b"})
+            QVERIFY(QDir().mkpath(dir));
+        auto write = [](const QString &path, const QByteArray &bytes) {
+            QFile f(path);
+            return f.open(QFile::WriteOnly) && f.write(bytes) == bytes.size();
+        };
+        QVERIFY(write(root + "/Song/set/001.mid", midi()));
+        QVERIFY(write(root + "/Lyrics/set/001.lyr", "NCN title\nArtist\nC\n\nAB"));
+        QVERIFY(write(root + "/Cursor/set/001.cur", QByteArray::fromHex("00001800")));
+        QVERIFY(write(root + "/Song/set/broken.mid", midi()));
+        QVERIFY(write(kar + "/a/test.kar", midi()));
+        QVERIFY(write(kar + "/b/test.kar", midi()));
+        QVERIFY(bt::validNcnRoot(root));
+        QVERIFY(!bt::validNcnRoot(kar));
+        auto scan = bt::scanDatabase(root, kar);
+        QCOMPARE(scan.discovered, 4);
+        QCOMPARE(scan.plan.items.size(), 3);
+        QCOMPARE(scan.plan.errors.size(), 1);
+        QCOMPARE(scan.plan.duplicates, 1);
+        for (const auto &item : scan.plan.items) {
+            QCOMPARE(item.destination, item.song.path);
+            QVERIFY(item.song.path.startsWith(data.path()));
+            QVERIFY(item.song.events.isEmpty());
+            QCOMPARE(item.song.events.capacity(), 0);
+            QCOMPARE(item.song.lyrics.capacity(), 0);
+        }
+        QFile original(root + "/Song/set/001.mid");
+        QVERIFY(original.open(QFile::ReadOnly));
+        QCOMPARE(original.readAll(), midi());
+        auto karOnly = bt::scanDatabase({}, kar);
+        QCOMPARE(karOnly.plan.items.size(), 2);
+        auto canceled =
+            bt::scanDatabase(root, kar, [](int, int, const QString &) { return false; });
+        QVERIFY(canceled.canceled);
+        QVERIFY(canceled.plan.items.isEmpty());
+        QVERIFY_EXCEPTION_THROWN(bt::scanDatabase(kar, {}), std::runtime_error);
+    }
+    void databaseRebuildIsAtomic() {
+        QTemporaryDir data;
+        bt::SongLibrary database(data.path() + "/library.sqlite");
+        bt::Song old;
+        old.path = data.path() + "/old.kar";
+        old.id = "old";
+        old.title = "Old index";
+        database.put(old);
+        bt::Song fresh;
+        fresh.path = data.path() + "/new.kar";
+        fresh.id = "new";
+        fresh.title = "New index";
+        QVERIFY_EXCEPTION_THROWN(
+            database.replaceAll({fresh}, [](int, int, const QString &) { return false; }),
+            std::runtime_error);
+        QCOMPARE(database.entries().size(), 1);
+        QCOMPARE(database.entries()[0].id, QString("old"));
+        database.replaceAll({fresh});
+        QCOMPARE(database.entries().size(), 1);
+        QCOMPARE(database.entries()[0].id, QString("new"));
     }
     void arbitraryChains() {
         bt::Engine engine;

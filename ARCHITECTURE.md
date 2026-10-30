@@ -1,4 +1,4 @@
-# BT Karaoke Studio 0.4 architecture
+# BT Karaoke Studio 0.4.1 architecture
 
 BT application code is independent of HandyKaraoke. Its legacy implementation is
 preserved only in a separate branch. Reference inspection of Handy's NCN behavior
@@ -121,3 +121,18 @@ uses a monotonic clock, follows speed and reanchors on pause/seek; paused text a
 redundant painting. Layout is recreated only on page/font/size changes. Profiles target
 30/60/120 lyric FPS, 10/25/40 mixer Hz and 64/128/256 sampler voices per program. Actual
 frame rate is host/display dependent; there is no new GPU driver initialization.
+
+## 0.4.1 song-database workflow
+
+The primary Add Songs action opens a two-path NCN/KAR database configuration, matching
+the reference application's folder-selection and Update Database workflow. This path
+indexes files in place. The prior copy/import workflow is an explicitly separate,
+collapsed extra tool. Persisted NCN/KAR roots are distinct from the copy destination.
+
+DatabaseScan validates NCN root structure, counts candidate files, scans metadata and
+identifies repeated ids within each type. The UI shows progress/current file and a
+pre-commit summary. Duplicate resolution changes only the proposed index. A worker
+uses its own uniquely named Qt SQL connection for the full replacement transaction;
+the UI connection is never used from another thread. Cancellation rolls back to the
+previous index. Source files remain unchanged. Queue entries are remapped by path
+following commit, retaining those still in the selected source folders.

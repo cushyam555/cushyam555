@@ -87,8 +87,8 @@ ImportPlan analyzeImport(const QStringList &paths, const QString &destination, b
             targets.insert(destKey);
             if (duplicate)
                 ++plan.duplicates;
-            song.events.clear();
-            song.lyrics.clear();
+            QVector<MidiEvent>().swap(song.events);
+            QVector<Lyric>().swap(song.lyrics);
             plan.items.push_back({song, target, duplicate, ncn});
         } catch (const std::exception &e) {
             plan.errors << QFileInfo(paths[i]).fileName() + ": " + e.what();

@@ -1,6 +1,7 @@
 #pragma once
 #include "Midi.h"
 #include <QSqlDatabase>
+#include <functional>
 namespace bt {
 QString applicationDataPath();
 // Metadata is persistent; MIDI events and full lyrics are loaded only when playing.
@@ -18,6 +19,8 @@ class SongLibrary {
     void endBatch();
     QVector<Song> entries() const;
     void removeMissing();
+    void replaceAll(const QVector<Song> &songs,
+                    const std::function<bool(int, int, const QString &)> &progress = {});
     static QString copyNcn(const QString &midi, const QString &destinationRoot,
                            bool overwrite = false);
     static QString copyKar(const QString &source, const QString &destination,
