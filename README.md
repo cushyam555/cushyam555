@@ -20,7 +20,7 @@
 
 ## เริ่มใช้งาน
 
-1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions/workflows/windows.yml)
+1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions/runs/41030169235)
    เลือกรอบที่สำเร็จและ artifact `BT-Karaoke-Studio-0.1.0-Windows-x64`
 2. แตก ZIP เปิดตัวติดตั้ง `BTKaraoke-0.1.0-Windows-x64-setup.exe`
 3. กด SoundFont เลือก `.sf2` ที่มีสิทธิ์ใช้ แล้ว Import เพลง `.mid` หรือ `.kar`
@@ -63,3 +63,22 @@ Tests ตรวจ MIDI/NCN, ไฟล์เสีย, routing กลอง, FX 
 SoundFont output และโหลด VST3 integration plugin จริงพร้อม parameter/state round-trip
 `--smoke-test` ตรวจการเปิดหน้าจอโดยไม่เปิด audio device
 ยังต้องทดสอบฟังเสียง จอที่สอง และปลั๊กอินของผู้ใช้บนพีซีจริง
+
+## ผลตรวจรุ่น 0.1.0
+
+Windows build ที่ผ่าน: [รอบ #9](https://github.com/cushyam555/cushyam555/actions/runs/41030169235)
+commit ที่ตรวจ: `2ffd246` ใช้ Qt 6.8.3 และ MSVC x64
+
+- CTest/QtTest ผ่าน 14 รายการ (12 กรณีทำงาน + เริ่ม/จบชุดทดสอบ) ไม่มีรายการข้าม
+- โหลด VST3 integration plugin จริง ประมวลผล gain ปรับ parameter, bypass และเรียกคืน state
+- SF2 ในพาธภาษาไทย, NCN/TIS-620/CUR, pause/resume และ hi-hat choke ผ่าน
+- จัดชุด DLL, สร้างตัวติดตั้ง, เปิดแอปโดยไม่ใช้ Qt ภายนอก, ติดตั้งและถอนติดตั้งผ่าน
+- artifact `BT-Karaoke-Studio-0.1.0-Windows-x64` ขนาด 42.7 MB มี setup และ SHA256
+- Linux/Qt 5.15.15 build, ชุดทดสอบเดียวกัน และ UI smoke ผ่านด้วย
+
+ยังไม่ใช่การรับรองปลั๊กอินเชิงพาณิชย์ทุกตัว และยังไม่ได้ฟังเสียง/ใช้จอที่สองบนพีซีของผู้ใช้จริง
+การทดสอบ UI ใช้ `--smoke-test` โดยไม่เปิด audio device; การสังเคราะห์เสียงทดสอบด้วย PCM output
+
+สคริปต์ `packaging/windows.ps1` ออกแบบสำหรับ GitHub Actions เป็นหลัก หากเรียกเอง
+ต้องกำหนด `QT_ROOT_DIR`, `VCToolsRedistDir` และ `RUNNER_TEMP` ให้เป็นโฟลเดอร์ที่มีอยู่
+และเขียนได้ พร้อมใช้ x64 Native Tools shell
