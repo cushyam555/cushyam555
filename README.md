@@ -28,7 +28,7 @@
 
 ## เริ่มใช้งาน
 
-1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions)
+1. ดาวน์โหลด artifact จาก [Windows build 0.2.0](https://github.com/cushyam555/cushyam555/actions/runs/41069047336)
    เลือกรอบที่สำเร็จและ artifact `BT-Karaoke-Studio-0.2.0-Windows-x64`
 2. แตก ZIP เปิดตัวติดตั้ง `BTKaraoke-0.2.0-Windows-x64-setup.exe`
 3. กด SoundFont เลือก `.sf2` ที่มีสิทธิ์ใช้ แล้ว Import เพลง `.mid` หรือ `.kar`
@@ -145,3 +145,20 @@ commit `863ebcd` ผ่านแล้ว พร้อม artifact `BT-Karaoke-S
 ชุดทดสอบเพิ่มการแยกกลอง GM ครบ 47 โน้ต, ผลรวมสัญญาณบัส/Send/FX/mute/solo,
 การป้องกัน routing วน, ปิดเมโลดี้, external-only silence, state round-trip และ migration
 ยังต้องทดสอบ loopMIDI/โปรแกรมเสียง/ปลั๊กอินของผู้ใช้บน Windows จริง
+
+### ผลตรวจ Windows 0.2.0
+
+[Windows build #14](https://github.com/cushyam555/cushyam555/actions/runs/41069047336)
+commit `602dce9` ผ่านแล้ว พร้อม artifact **BT-Karaoke-Studio-0.2.0-Windows-x64** (42.8 MB)
+ภายในมีตัวติดตั้ง `BTKaraoke-0.2.0-Windows-x64-setup.exe` และ SHA256.txt
+
+- Core QtTest 21 รายการผ่าน (รวม init/cleanup) ไม่มีรายการข้าม
+- CTest ทั้ง core, Safe Mode และ normal startup ผ่าน
+- VST3 integration module จริง, NCN ชื่อไฟล์ต่างตัวพิมพ์, GM drums, bus/send และ melody tests ผ่าน
+- ตรวจแพ็กเกจโดยตัด Qt จาก developer PATH, ตรวจ launcher เมื่อ DLL หายผ่าน
+- ติดตั้งแล้วเปิดทั้งปกติและ Safe Mode จากนั้นถอนติดตั้งผ่าน
+- Linux/Qt 5.15 ตรวจชุดเดียวกันผ่าน
+
+Windows runner ไม่มี loopMIDI และไม่ได้ทดสอบกับโปรแกรมเสียงภายนอกจริง
+ทดสอบ MIDI device enumeration/invalid-port cleanup แล้ว แต่ยังไม่ใช่การยืนยัน loopback end-to-end
+ไม่ได้เป็นผลทดสอบจากพีซี Windows 10 21H2 ของผู้ใช้
