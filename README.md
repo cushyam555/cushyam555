@@ -76,7 +76,7 @@ Reset/การเปลี่ยน mute/solo/หยุด/seek จะตัด
 
 ## ดาวน์โหลดและติดตั้ง
 
-จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions) เลือกรอบ 0.3.0 ที่สำเร็จ
+จาก [Windows build 0.3.0](https://github.com/cushyam555/cushyam555/actions/runs/41075483273) เลือกรอบ 0.3.0 ที่สำเร็จ
 และ artifact **BT-Karaoke-Studio-0.3.0-Windows-x64** แตก ZIP แล้วเปิด
 `BTKaraoke-0.3.0-Windows-x64-setup.exe` ติดตั้งทับรุ่นเดิมได้ ภายในมี SHA256.txt
 
@@ -111,3 +111,19 @@ Core tests ครอบคลุม program routing/note-off หลัง progra
 FX chain, กลอง, NCN copy/conflict/source removal, SQLite หลังเปิดใหม่, lyric style และ dark palette
 รวม VST3 integration module จริง และการเปิดแอปทั้ง safe/normal
 ยังต้องลอง SoundFont, เพลง NCN, loopMIDI, จอที่สอง และปลั๊กอินจริงของผู้ใช้บนพีซี
+
+## ผลตรวจรุ่น 0.3.0
+
+[Windows build #15](https://github.com/cushyam555/cushyam555/actions/runs/41075483273)
+commit `758f92d` ผ่านแล้ว artifact **BT-Karaoke-Studio-0.3.0-Windows-x64** (43.7 MB)
+
+- QtTest 25 รายการผ่าน รวม init/cleanup ไม่มีรายการข้าม
+- CTest ทั้ง 5 ชุดผ่าน: core, safe startup, normal startup, mixer UI และ lyric settings UI
+- UI test กดเพิ่มบัสจริง เลือกบัสใหม่จากช่อง 128 และตรวจ FX ในบัสใหม่
+- ตรวจ SQLite driver ที่ deploy, เปิด staged package โดยตัด developer Qt PATH ผ่าน
+- จำลอง Qt DLL หายแล้ว launcher รายงาน failure ผ่าน
+- ติดตั้งแล้วเปิดทั้งปกติและ Safe Mode และถอนติดตั้งผ่าน
+- Linux Qt 5.15 ผ่านชุดเดียวกัน พร้อมตรวจภาพหน้าตั้งค่า dark palette
+
+เป็นผลจาก Windows runner ยังไม่ใช่เครื่อง Windows 10 21H2 ของผู้ใช้
+ยังต้องลองชุด NCN, SoundFont, loopMIDI, จอร้องและ VST จริงของผู้ใช้
