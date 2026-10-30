@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
+#include <array>
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 namespace bt {
@@ -63,7 +64,7 @@ public:
 QJsonArray scanVst3(const QString&path){std::string error;auto module=VST3::Hosting::Module::create(path.toStdString(),error);if(!module)throw std::runtime_error(error);QJsonArray results;for(const auto&c:module->getFactory().classInfos())if(c.category()==kVstAudioEffectClass)results.append(QJsonObject{{"path",path},{"id",QString::fromStdString(c.ID().toString())},{"name",QString::fromStdString(c.name())},{"vendor",QString::fromStdString(c.vendor())},{"category",QString::fromStdString(c.subCategoriesString())}});return results;}
 struct VstEffect::Impl {
  QString path,id,title;double rate;VST3::Hosting::Module::Ptr module;IPtr<PlugProvider> provider;IPtr<IComponent> component;IPtr<IEditController> controller;IPtr<IAudioProcessor> processor;IPtr<Handler> handler;
- HostProcessData data;ProcessContext context{};EventList events{256};ParameterChanges changes{1024},outputs{1024};std::vector<ParameterInfo> info;std::vector<double> pending;std::vector<bool> dirty;std::mutex mutex;
+ std::array<float,1024> dry{};HostProcessData data;ProcessContext context{};EventList events{256};ParameterChanges changes{1024},outputs{1024};std::vector<ParameterInfo> info;std::vector<double> pending;std::vector<bool> dirty;std::mutex mutex;
  Impl(QString p,QString uid,double sr):path(std::move(p)),id(std::move(uid)),rate(sr){
  std::string error;module=VST3::Hosting::Module::create(path.toStdString(),error);if(!module)throw std::runtime_error(error);
  auto factory=module->getFactory();factory.setHostContext(&host());PluginContextFactory::instance().setPluginContext(&host());
@@ -90,7 +91,7 @@ QString VstEffect::name()const{return d->title;}
 std::vector<Parameter> VstEffect::parameters()const{std::vector<Parameter> r;if(d->controller)for(const auto&i:d->info)r.push_back({fromString(i.title),d->controller->getParamNormalized(i.id)});return r;}
 void VstEffect::setParameter(int index,double v){if(index<0||index>=int(d->info.size()))return;v=std::clamp(v,0.,1.);d->controller->setParamNormalized(d->info[size_t(index)].id,v);std::lock_guard<std::mutex> lock(d->mutex);d->pending[size_t(index)]=v;d->dirty[size_t(index)]=true;}
 void VstEffect::process(float*b,int frames,const std::vector<MidiEvent>&midi,double bpm,double position){
- if(bypass)return;auto&x=*d;x.events.clear();x.changes.clearQueue();x.outputs.clearQueue();
+ auto&x=*d;if(bypass)std::copy_n(b,frames*2,x.dry.data());x.events.clear();x.changes.clearQueue();x.outputs.clearQueue();
  if(x.mutex.try_lock()){for(size_t i=0;i<x.info.size();++i)if(x.dirty[i]){int32 index=0;auto*q=x.changes.addParameterData(x.info[i].id,index);if(q)q->addPoint(0,x.pending[i],index);x.dirty[i]=false;}x.mutex.unlock();}
  for(const auto&m:midi){if(x.component->getBusCount(kEvent,kInput)==0)break;int kind=m.status&0xf0;if(kind!=0x90&&kind!=0x80)continue;Event e{};e.busIndex=0;e.sampleOffset=0;e.ppqPosition=position*bpm/60.;if(kind==0x90&&m.data2){e.type=Event::kNoteOnEvent;e.noteOn.channel=0;e.noteOn.pitch=int16(m.data1);e.noteOn.velocity=m.data2/127.f;e.noteOn.noteId=-1;}else{e.type=Event::kNoteOffEvent;e.noteOff.channel=0;e.noteOff.pitch=int16(m.data1);e.noteOff.velocity=0;e.noteOff.noteId=-1;}x.events.addEvent(e);}
  for(int bus=0;bus<x.data.numInputs;++bus){auto&in=x.data.inputs[bus];in.silenceFlags=0;for(int c=0;c<in.numChannels;++c)for(int f=0;f<frames;++f)in.channelBuffers32[c][f]=bus==0?(in.numChannels==1?(b[2*f]+b[2*f+1])*.5f:b[2*f+std::min(c,1)]):0;}
@@ -98,6 +99,7 @@ void VstEffect::process(float*b,int frames,const std::vector<MidiEvent>&midi,dou
  x.data.numSamples=frames;x.data.processMode=kRealtime;x.data.symbolicSampleSize=kSample32;x.data.inputEvents=&x.events;x.data.inputParameterChanges=&x.changes;x.data.outputParameterChanges=&x.outputs;
  x.context.tempo=bpm;x.context.projectTimeSamples=int64(position*x.rate);x.context.projectTimeMusic=position*bpm/60.;x.context.state=(transportPlaying?ProcessContext::kPlaying:0)|ProcessContext::kTempoValid|ProcessContext::kProjectTimeMusicValid|ProcessContext::kTimeSigValid;x.data.processContext=&x.context;
  if(x.processor->process(x.data)!=kResultOk)return;auto&out=x.data.outputs[0];for(int f=0;f<frames;++f){b[2*f]=out.channelBuffers32[0][f];b[2*f+1]=out.channelBuffers32[std::min(1,out.numChannels-1)][f];}
+ if(bypass)std::copy_n(x.dry.data(),frames*2,b);
 }
 QJsonObject VstEffect::save()const{QJsonObject r{{"type","VST3"},{"path",d->path},{"id",d->id},{"name",d->title},{"bypass",bypass}};QJsonArray values;for(auto p:parameters())values.append(p.value);r["parameters"]=values;MemoryStream stream;if(d->component->getState(&stream)==kResultOk)r["state"]=QString::fromLatin1(QByteArray(stream.getData(),int(stream.getSize())).toBase64());return r;}
 void VstEffect::restore(const QJsonObject&r){auto bytes=QByteArray::fromBase64(r["state"].toString().toLatin1());if(!bytes.isEmpty()){MemoryStream stream(bytes.data(),bytes.size());d->component->setState(&stream);stream.seek(0,IBStream::kIBSeekSet,nullptr);if(d->controller)d->controller->setComponentState(&stream);}auto values=r["parameters"].toArray();for(int i=0;i<values.size();++i)setParameter(i,values[i].toDouble());}

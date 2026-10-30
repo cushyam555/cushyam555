@@ -6,9 +6,10 @@
 namespace bt {
 namespace {
 class Builtin final:public Effect {
- QString type; double rate; std::vector<Parameter> p;std::vector<float> delay;size_t cursor=0;float env=0,gain=1,low[2]{},high[2]{};
+ QString type; double rate; std::vector<Parameter> p;std::vector<float> delay;size_t cursor=0;float env=0,gain=1,low[2]{},high[2]{},damped[8]{};std::array<std::vector<float>,12> room;size_t frame=0;
 public:
- Builtin(QString t,double sr):type(std::move(t)),rate(sr),delay((type=="Delay"||type=="Reverb")?size_t(sr*2)*2:2,0){
+ Builtin(QString t,double sr):type(std::move(t)),rate(sr),delay(type=="Delay"?size_t(sr*2)*2:2,0){
+ if(type=="Reverb"){const double lengths[]={.0297,.0371,.0411,.0437};for(int c=0;c<2;++c)for(int k=0;k<4;++k)room[c*4+k].resize(size_t(sr*(lengths[k]*1.6+.002)));for(int k=8;k<12;++k)room[k].resize(size_t(sr*(k%2?.0017:.005)));}
  if(type=="EQ")p={{"Low",.5},{"Mid",.5},{"High",.5}};
  else if(type=="Compressor")p={{"Threshold",.65},{"Ratio",.3},{"Makeup",.25}};
  else if(type=="Gate")p={{"Threshold",.2},{"Release",.3}};
@@ -21,7 +22,7 @@ public:
  QString name()const override{return type;}
  std::vector<Parameter> parameters()const override{return p;}
  void setParameter(int i,double v)override{if(i>=0&&i<int(p.size()))p[size_t(i)].value=std::clamp(v,0.,1.);}
- void reset()override{std::fill(delay.begin(),delay.end(),0);cursor=0;env=0;gain=1;std::fill(std::begin(low),std::end(low),0);std::fill(std::begin(high),std::end(high),0);}
+ void reset()override{std::fill(delay.begin(),delay.end(),0);cursor=0;frame=0;for(auto&r:room)std::fill(r.begin(),r.end(),0);std::fill(std::begin(damped),std::end(damped),0);env=0;gain=1;std::fill(std::begin(low),std::end(low),0);std::fill(std::begin(high),std::end(high),0);}
  QJsonObject save()const override{QJsonArray a;for(auto &v:p)a.append(v.value);return {{"type",type},{"bypass",bypass},{"values",a}};}
  void process(float*b,int n,const std::vector<MidiEvent>&,double,double)override{
  if(bypass)return;auto value=[&](int i){return float(p[size_t(i)].value);};
@@ -33,11 +34,13 @@ public:
  for(int c=0;c<2;++c){float x=b[2*i+c],y=x;
  if(type=="EQ"){low[c]+=aLow*(x-low[c]);high[c]+=aHigh*(x-high[c]);y=low[c]*std::pow(10.f,(value(0)-.5f)*24/20)+(high[c]-low[c])*std::pow(10.f,(value(1)-.5f)*24/20)+(x-high[c])*std::pow(10.f,(value(2)-.5f)*24/20);}
  else if(type=="Saturation"){float d=1+value(0)*15;float s=std::tanh(x*d)/std::tanh(d);y=x*(1-value(1))+s*value(1);}
- else if(type=="Delay"||type=="Reverb"){bool rev=type=="Reverb";size_t length=size_t(rate*(rev?.031+value(0)*.1:.02+value(0)*1.5))*2;length=std::max<size_t>(2,std::min(length,delay.size()-2));size_t read=(cursor+delay.size()-length+size_t(c))%delay.size();float tap=delay[read];float feedback=rev?.35f+value(1)*.5f:value(1)*.9f;delay[(cursor+size_t(c))%delay.size()]=std::clamp(x+tap*feedback,-4.f,4.f);y=x*(1-value(2))+tap*value(2);}
+ else if(type=="Reverb"){float sum=0;const double lengths[]={.0297,.0371,.0411,.0437};for(int k=0;k<4;++k){int j=c*4+k;auto&r=room[j];size_t offset=size_t(rate*(lengths[k]*(.5+value(0))+(c?.0007:0)));offset=std::clamp<size_t>(offset,1,r.size()-1);float tap=r[(frame+r.size()-offset)%r.size()];damped[j]+=.25f*(tap-damped[j]);r[frame%r.size()]=std::clamp(x*.25f+damped[j]*(.35f+value(1)*.55f),-4.f,4.f);sum+=tap;}for(int k=0;k<2;++k){auto&r=room[8+c*2+k];float tap=r[frame%r.size()];float diff=tap-sum*.5f;r[frame%r.size()]=sum+diff*.5f;sum=diff;}y=x*(1-value(2))+sum*value(2);}
+ else if(type=="Delay"){size_t length=size_t(rate*(.02+value(0)*1.5))*2;length=std::max<size_t>(2,std::min(length,delay.size()-2));size_t read=(cursor+delay.size()-length+size_t(c))%delay.size();float tap=delay[read];delay[(cursor+size_t(c))%delay.size()]=std::clamp(x+tap*value(1)*.9f,-4.f,4.f);y=x*(1-value(2))+tap*value(2);}
+
  else if(type=="Gain")y=x*std::pow(10.f,(value(0)-.5f)*48/20);
  else y=x*dynamics;
  b[2*i+c]=std::isfinite(y)?y:0;
- }cursor=(cursor+2)%delay.size();
+ }cursor=(cursor+2)%delay.size();++frame;
  }}
 };
 }
