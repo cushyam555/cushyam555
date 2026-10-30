@@ -20,7 +20,7 @@
 
 ## เริ่มใช้งาน
 
-1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions/workflows/windows.yml)
+1. ดาวน์โหลด artifact จาก [Windows builds](https://github.com/cushyam555/cushyam555/actions/runs/41061244559)
    เลือกรอบที่สำเร็จและ artifact `BT-Karaoke-Studio-0.1.1-Windows-x64`
 2. แตก ZIP เปิดตัวติดตั้ง `BTKaraoke-0.1.1-Windows-x64-setup.exe`
 3. กด SoundFont เลือก `.sf2` ที่มีสิทธิ์ใช้ แล้ว Import เพลง `.mid` หรือ `.kar`
@@ -95,3 +95,18 @@ commit ที่ตรวจ: `2ffd246` ใช้ Qt 6.8.3 และ MSVC x64
 
 Windows CI ตรวจทั้งการเปิดแบบปกติที่ผ่านเส้นทางเริ่มระบบเสียง และ Safe Mode
 รวมถึงตรวจว่า launcher รายงานความล้มเหลวเมื่อ Qt DLL หาย ไม่ใช่เฉพาะการเปิดแบบออฟไลน์เดิม
+
+### ผลตรวจ 0.1.1
+
+[Windows build #11](https://github.com/cushyam555/cushyam555/actions/runs/41061244559)
+commit `863ebcd` ผ่านแล้ว พร้อม artifact `BT-Karaoke-Studio-0.1.1-Windows-x64` (42.8 MB)
+
+- core tests 16 รายการผ่าน ไม่มีรายการข้าม
+- CTest ตรวจ core, Safe Mode และ normal startup ผ่านทั้ง 3 ชุด
+- โหมดปกติเปิดหน้าต่างได้แม้การตรวจเสียงคืนข้อผิดพลาด (เครื่องทดสอบไม่มีอุปกรณ์เสียง)
+- launcher ตรวจพบการโหลดล้มเหลวเมื่อจำลอง Qt DLL หาย โดยไม่ไปใช้ Qt จาก PATH เครื่องพัฒนา
+- ติดตั้งแพ็กเกจแล้วเปิดทั้งแบบปกติและ Safe Mode และถอนติดตั้งผ่าน
+
+ผลนี้เป็น Windows runner ไม่ใช่การทดสอบบนเครื่อง Windows 10 21H2 ของผู้ใช้โดยตรง
+หากยังเปิดไม่ได้ ให้ใช้ Safe Mode จาก Start menu และแจ้งรหัสจากหน้าต่างข้อผิดพลาด
+หรือส่งท้ายไฟล์ `startup.log` / `launcher.log` ในโฟลเดอร์ log ที่ระบุข้างต้น
