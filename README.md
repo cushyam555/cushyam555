@@ -87,7 +87,7 @@ loopMIDI ส่งข้อมูล MIDI ไม่ส่งเสียงห�
 
 ## ดาวน์โหลดและติดตั้ง
 
-เลือก [Windows builds](https://github.com/cushyam555/cushyam555/actions) รุ่น 0.4.1 ที่สำเร็จ
+เลือก [Windows build 0.4.1](https://github.com/cushyam555/cushyam555/actions/runs/41095212824) รุ่น 0.4.1 ที่สำเร็จ
 ดาวน์โหลด artifact **BT-Karaoke-Studio-0.4.1-Windows-x64** แตก ZIP แล้วติดตั้ง
 `BTKaraoke-0.4.1-Windows-x64-setup.exe` ทับรุ่นเดิมได้ ภายในมี SHA256.txt
 
@@ -122,3 +122,17 @@ Smoke/startup tests ใช้ฐานข้อมูลและ preferences �
 
 ชุดทดสอบรุ่นนี้เพิ่มการสแกน NCN/KAR จากสองที่เก็บโดยไม่คัดลอก, รหัสซ้ำ, ยกเลิก,
 การแทนฐานข้อมูลแบบ atomic และการกดปรับปรุงจากหน้าจอพร้อมรักษาคิวเพลงเดิมที่ยังใช้ได้
+
+## ผลตรวจ 0.4.1
+
+[Windows build #19](https://github.com/cushyam555/cushyam555/actions/runs/41095212824)
+commit `f9e96d8` ผ่านแล้ว พร้อม artifact **BT-Karaoke-Studio-0.4.1-Windows-x64** (43.7 MB)
+
+- Core QtTest 30 รายการผ่าน รวม init/cleanup ไม่มีรายการข้าม
+- CTest ทั้ง 8 ชุดผ่าน รวมหน้าฐานข้อมูลเพลง NCN/KAR และหน้าข้อผิดพลาดเมื่อเลือกโฟลเดอร์ไม่ถูกต้อง
+- ตรวจการปรับฐานข้อมูลโดยไม่คัดลอกเพลง การรักษาคิว และ transaction rollback
+- ตรวจ staged package/SQLite โดยตัด developer Qt PATH, จำลอง DLL หายผ่าน
+- ติดตั้ง เปิดแบบปกติ/Safe Mode และถอนติดตั้งผ่าน
+- Linux Qt 5.15 ผ่านชุดเดียวกัน พร้อมภาพหน้าฐานข้อมูลจริง
+
+เป็นผล Windows runner ยังต้องลองกับโฟลเดอร์ NCN/KAR และปลั๊กอินของผู้ใช้บนพีซีจริง
