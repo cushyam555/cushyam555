@@ -34,6 +34,14 @@ QString timeText(double seconds) {
     int n = std::max(0, int(seconds));
     return QString("%1:%2").arg(n / 60, 2, 10, QChar('0')).arg(n % 60, 2, 10, QChar('0'));
 }
+QString songKey(const QString &path) {
+    auto key = QFileInfo(path).canonicalFilePath();
+#ifdef _WIN32
+    return key.toCaseFolded();
+#else
+    return key;
+#endif
+}
 QString registry() {
     auto dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(dir);
@@ -380,7 +388,7 @@ void MainWindow::importPaths(const QStringList &paths) {
     QStringList errors;
     QSet<QString> known;
     for (const auto &song : library)
-        known.insert(QFileInfo(song.path).canonicalFilePath());
+        known.insert(songKey(song.path));
     QProgressDialog progress("Importing songs…", "Cancel", 0, paths.size(), this);
     progress.setWindowModality(Qt::WindowModal);
     int added = 0, skipped = 0, failed = 0;
@@ -390,7 +398,7 @@ void MainWindow::importPaths(const QStringList &paths) {
             break;
         try {
             auto song = readSong(paths[i]);
-            auto canonical = QFileInfo(song.path).canonicalFilePath();
+            auto canonical = songKey(song.path);
             if (known.contains(canonical)) {
                 ++skipped;
                 continue;

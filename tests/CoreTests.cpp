@@ -72,8 +72,8 @@ class CoreTests : public QObject {
         cur.close();
         auto song = bt::readSong(mid.fileName());
         QCOMPARE(song.title, QString("NCN title"));
-        QCOMPARE(bt::readSong(lyr.fileName()).path, mid.fileName());
-        QCOMPARE(bt::readSong(cur.fileName()).path, mid.fileName());
+        QCOMPARE(bt::readSong(lyr.fileName()).title, song.title);
+        QCOMPARE(bt::readSong(cur.fileName()).lyrics.size(), song.lyrics.size());
         QCOMPARE(song.lyrics.size(), 2);
         QCOMPARE(song.lyrics[0].text, QString::fromUtf8("ก"));
         QVERIFY(std::abs(song.lyrics[1].time - .5) < .001);

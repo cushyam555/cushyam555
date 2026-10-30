@@ -26,6 +26,11 @@ jobs:
           try {
             ./packaging/windows.ps1 *>&1 | Tee-Object windows-output.txt
           } catch {
+            if (Test-Path build/core-results.txt) {
+              $core = (Get-Content build/core-results.txt -Tail 100 | Out-String)
+              $core = $core.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+              Write-Host "::error title=BT Studio core test results::$core"
+            }
             $diagnostics = ($_ | Out-String) + (Get-Content windows-output.txt -Tail 50 | Out-String)
             if (Test-Path build/Testing/Temporary/LastTest.log) {
               $diagnostics = $diagnostics + (Get-Content build/Testing/Temporary/LastTest.log -Tail 90 | Out-String)
