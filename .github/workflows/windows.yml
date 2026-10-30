@@ -1,0 +1,44 @@
+name: Build BT Karaoke for Windows
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          arch: win64_msvc2019_64
+          cache: true
+      - name: Build, test and stage
+        shell: pwsh
+        run: ./packaging/build-windows.ps1
+      - name: Create installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/bt-x64.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash installer-output/*.exe -Algorithm SHA256 | Format-List | Out-File installer-output/SHA256.txt
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BT-Karaoke-Windows-x64
+          path: installer-output/
+          if-no-files-found: error
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BT-Karaoke-test-results
+          path: build-windows-tests/results.txt
+          if-no-files-found: ignore
