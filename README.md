@@ -78,7 +78,7 @@ loopMIDI ส่งข้อมูล MIDI ไม่ส่งเสียงห�
 
 ## ดาวน์โหลดและติดตั้ง
 
-เลือก [Windows build](https://github.com/cushyam555/cushyam555/actions) รุ่น 0.4.0 ที่สำเร็จ
+เลือก [Windows build 0.4.0](https://github.com/cushyam555/cushyam555/actions/runs/41089635094) รุ่น 0.4.0 ที่สำเร็จ
 ดาวน์โหลด artifact **BT-Karaoke-Studio-0.4.0-Windows-x64** แตก ZIP แล้วติดตั้ง
 `BTKaraoke-0.4.0-Windows-x64-setup.exe` ทับรุ่นเดิมได้ ภายในมี SHA256.txt
 
@@ -109,3 +109,18 @@ lyric interpolation/gap/profile, preflight ที่ไม่เขียนไ�
 UI tests กดปุ่ม KEY/TEMPO และทดสอบหน้าถามเริ่มนำเข้า/ข้าม/ทับจริงบนชุดเพลงทดสอบชั่วคราว
 Smoke/startup tests ใช้ฐานข้อมูลและ preferences ชั่วคราว ไม่แตะคลังเพลงผู้ใช้
 ยังต้องทดสอบเพลง NCN, SoundFont, loopMIDI, จอที่สอง และ VST จริงของผู้ใช้บนพีซี
+
+## ผลตรวจ 0.4.0
+
+[Windows build #17](https://github.com/cushyam555/cushyam555/actions/runs/41089635094)
+commit `bfb0b77` พร้อม artifact **BT-Karaoke-Studio-0.4.0-Windows-x64** (43.7 MB)
+
+- Core QtTest 28 รายการผ่าน (รวม init/cleanup) ไม่มีรายการข้าม
+- CTest ผ่านครบ 7 ชุด: core, Safe Mode, normal startup, mixer, lyric settings, keyboard controls และ import UI
+- UI test กดยืนยันนำเข้า/ข้าม/ทับไฟล์จริง โดยใช้ชุด KAR ชั่วคราว และตรวจ bytes หลังแต่ละคำตอบ
+- ตรวจเลข 000/127, อัปเกรดชื่อเดิม, CH9 ที่ไม่ตัดเสียงช่องอื่น, line spacing/profile และ KAR line-marker timing
+- ตรวจแพ็กเกจ SQLite, ตัด developer Qt PATH, จำลอง DLL หาย, ติดตั้ง/เปิด/ถอนติดตั้งผ่าน
+- Linux Qt 5.15 ผ่านชุดเดียวกัน พร้อมตรวจภาพหน้าตั้งค่าและ renderer จริง
+
+ผลนี้เป็นเครื่องทดสอบ Windows runner ไม่ใช่การรับรอง FPS หรือปลั๊กอินทุกตัวบนพีซีผู้ใช้
+โปรดลองชุด NCN, SoundFont และระดับทรัพยากรที่เหมาะกับเครื่องจริง
