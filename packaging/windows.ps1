@@ -22,7 +22,7 @@ Copy-Item build/licenses dist/dependency-licenses -Recurse -Force
 Prefix=.
 Plugins=.
 '@ | Set-Content dist/qt.conf -Encoding ascii
-function CheckApp([string]$path, [string]$mode = '--smoke-test') {
+function CheckApp([string]$path, [string]$mode = '--smoke-test', [bool]$expectFailure = $false) {
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $path
     $info.Arguments = $mode
@@ -40,6 +40,10 @@ function CheckApp([string]$path, [string]$mode = '--smoke-test') {
     if (-not $p.WaitForExit(30000)) { $p.Kill(); throw 'UI smoke test timeout' }
     $text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
     Write-Host $text
+    if ($expectFailure) {
+        if ($p.ExitCode -eq 0) { throw 'Launcher did not detect the missing Qt runtime' }
+        return
+    }
     $marker = if ($mode -eq '--startup-test') { 'BT_STARTUP_VISIBLE PASS' } else { 'BT_UI_SMOKE PASS' }
     if ($p.ExitCode -ne 0 -or $text -notmatch $marker) { throw "Application startup failed: $($p.ExitCode)" }
 }
@@ -48,8 +52,7 @@ CheckApp (Join-Path $root 'dist/BTKaraoke.exe') '--startup-test'
 # The static native launcher must report a missing Qt runtime instead of disappearing.
 Rename-Item dist/Qt6Core.dll Qt6Core.dll.unavailable
 try {
-    $missing = Start-Process (Join-Path $root 'dist/BTKaraoke.exe') -ArgumentList '--smoke-test' -Wait -PassThru
-    if ($missing.ExitCode -eq 0) { throw 'Launcher did not detect the missing Qt runtime' }
+    CheckApp (Join-Path $root 'dist/BTKaraoke.exe') '--smoke-test' $true
 } finally { Rename-Item dist/Qt6Core.dll.unavailable Qt6Core.dll }
 
 Run "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" @('packaging/bt.iss')
