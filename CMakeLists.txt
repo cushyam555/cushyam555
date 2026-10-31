@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(BTKaraoke VERSION 0.4.1 LANGUAGES C CXX)
+project(BTKaraoke VERSION 0.5.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC OFF)
@@ -94,3 +94,6 @@ set_tests_properties(bt_controls_ui bt_import_ui PROPERTIES ENVIRONMENT "QT_QPA_
 
 add_test(NAME bt_database_ui COMMAND BTKaraoke --database-ui-test)
 set_tests_properties(bt_database_ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
+add_test(NAME bt_performance_ui COMMAND BTKaraoke --performance-ui-test)
+set_tests_properties(bt_performance_ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)

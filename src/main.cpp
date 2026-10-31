@@ -13,7 +13,7 @@
 int main(int argc, char **argv) {
     QCoreApplication::setApplicationName("BT Karaoke");
     QCoreApplication::setOrganizationName("BT Studio");
-    QCoreApplication::setApplicationVersion("0.4.1");
+    QCoreApplication::setApplicationVersion("0.5.0");
     bt::installStartupLog();
     try {
         bool probe = false;
@@ -48,6 +48,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         const bool smoke = args.contains("--smoke-test") || args.contains("--mixer-ui-test") ||
+                           args.contains("--performance-ui-test") ||
                            args.contains("--controls-ui-test") ||
                            args.contains("--import-ui-test") || args.contains("--database-ui-test"),
                    startup = args.contains("--startup-test");
@@ -72,7 +73,8 @@ int main(int argc, char **argv) {
         bt::startupLog("BT_WINDOW_SHOWN");
         if (smoke)
             QTimer::singleShot(400, &app, [&] {
-                bool ready = (!args.contains("--mixer-ui-test") || w.verifyMixerUi()) &&
+                bool ready = (!args.contains("--performance-ui-test") || w.verifyPerformanceUi()) &&
+                             (!args.contains("--mixer-ui-test") || w.verifyMixerUi()) &&
                              (!args.contains("--controls-ui-test") || w.verifyControlsUi()) &&
                              (!args.contains("--import-ui-test") || w.verifyImportUi()) &&
                              (!args.contains("--database-ui-test") || w.verifyDatabaseUi()) &&

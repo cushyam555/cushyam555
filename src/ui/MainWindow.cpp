@@ -140,7 +140,7 @@ bool libraryTask(QWidget *parent, QProgressBar *bar, QLabel *file,
 }
 } // namespace
 MainWindow::MainWindow(bool offline) {
-    setWindowTitle("BT Karaoke • Studio 0.4.1");
+    setWindowTitle("BT Karaoke • Studio 0.5.0");
     QSettings preferences;
     storageRoot = preferences.value("NCN/storage").toString();
     if (!songStorageAllowed(storageRoot, applicationDataPath()))
@@ -170,14 +170,14 @@ MainWindow::MainWindow(bool offline) {
     auto *root = new QWidget;
     setCentralWidget(root);
     auto *outer = new QVBoxLayout(root);
-    outer->setContentsMargins(22, 18, 22, 18);
-    outer->setSpacing(16);
+    outer->setContentsMargins(12, 10, 12, 10);
+    outer->setSpacing(8);
     auto *top = new QHBoxLayout;
     outer->addLayout(top);
     auto *brand = new QLabel("BT <span style='color:#a397ff'>Karaoke</span>");
     brand->setObjectName("brand");
     top->addWidget(brand);
-    auto *tag = new QLabel("STUDIO  /  LIVE PERFORMANCE");
+    auto *tag = new QLabel("NCN / KAR  •  เวทีคาราโอเกะ");
     tag->setObjectName("muted");
     top->addWidget(tag);
     top->addStretch();
@@ -214,16 +214,16 @@ MainWindow::MainWindow(bool offline) {
     outer->addLayout(nav);
     pages = new QStackedWidget;
     int index = 0;
-    for (auto name : {"Library && queue", "Mixer && FX", "VST3 plugins"}) {
+    for (auto name : {"หน้าร้องเพลง", "มิกเซอร์ / FX", "ปลั๊กอิน VST3"}) {
         int page = index++;
         auto *b = button(name, nav, [this, page] { pages->setCurrentIndex(page); }, this);
         b->setMinimumWidth(160);
     }
     nav->addStretch();
-    button("Stage / second display", nav, [this] { showStage(); }, this);
+    button("จอที่สอง", nav, [this] { showStage(); }, this);
     auto *midiControls = new QHBoxLayout;
     outer->addLayout(midiControls);
-    button("Lyrics / appearance", midiControls, [this] { lyricsSettings(); }, this);
+    button("เนื้อเพลง / การแสดงผล", midiControls, [this] { lyricsSettings(); }, this);
     button("MIDI / loopMIDI", midiControls, [this] { midiSettings(); }, this);
     button("Panic", midiControls, [this] { engine.panic(); }, this);
     melodyMute = new QCheckBox("ปิดเมโลดี้ (CH9)");
@@ -234,18 +234,39 @@ MainWindow::MainWindow(bool offline) {
     outer->addWidget(pages, 1);
     auto *libraryPage = new QWidget;
     pages->addWidget(libraryPage);
-    auto *libLayout = new QHBoxLayout(libraryPage);
+    auto *performanceLayout = new QVBoxLayout(libraryPage);
+    performanceLayout->setContentsMargins(0, 0, 0, 0);
+    auto *splitter = new QSplitter(Qt::Vertical);
+    splitter->setObjectName("performanceSplitter");
+    performanceLayout->addWidget(splitter);
+    mainLyrics = new LyricCanvas;
+    mainLyrics->setObjectName("mainLyrics");
+    mainLyrics->setClock([this] { return engine.position.load(); },
+                         [this] { return engine.playing.load(); },
+                         [this] { return engine.playbackSpeed.load(); });
+    mainLyrics->setAppearance(lyricStyle);
+    splitter->addWidget(mainLyrics);
+    browser = new QWidget;
+    browser->setObjectName("songBrowser");
+    splitter->addWidget(browser);
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
+    splitter->setChildrenCollapsible(false);
+    auto *libLayout = new QHBoxLayout(browser);
     libLayout->setContentsMargins(0, 0, 0, 0);
     auto *left = new QVBoxLayout;
     libLayout->addLayout(left, 3);
-    auto *heading = new QLabel("Your music. Your stage.");
+    auto *heading = new QLabel("ค้นหาเพลง");
     heading->setObjectName("heading");
     left->addWidget(heading);
     auto *search = new QLineEdit;
+    search->setObjectName("songSearch");
+    songSearch = search;
     search->setPlaceholderText("ค้นหารหัสเพลง / ชื่อ / ศิลปิน (แสดงสูงสุด 1,000 รายการ)…");
     left->addWidget(search);
     connect(search, &QLineEdit::textChanged, this, [this](const QString &s) { refreshLibrary(s); });
     songs = new QListWidget;
+    songs->setObjectName("songResults");
     left->addWidget(songs, 1);
     connect(songs, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *i) {
         auto *item = new QListWidgetItem(i->text());
@@ -259,7 +280,7 @@ MainWindow::MainWindow(bool offline) {
         ->setObjectName("primary");
 
     button(
-        "Add to queue", libButtons,
+        "เพิ่มเข้าคิว", libButtons,
         [this] {
             auto *i = songs->currentItem();
             if (i) {
@@ -271,7 +292,7 @@ MainWindow::MainWindow(bool offline) {
         this);
     auto *right = new QVBoxLayout;
     libLayout->addLayout(right, 2);
-    auto *qheading = new QLabel("ON DECK  •  คิวเพลง");
+    auto *qheading = new QLabel("คิวเพลง");
     qheading->setObjectName("heading");
     right->addWidget(qheading);
     queue = new QListWidget;
@@ -286,7 +307,7 @@ MainWindow::MainWindow(bool offline) {
     auto *qb = new QHBoxLayout;
     right->addLayout(qb);
     button(
-        "Play selected", qb,
+        "เล่นเพลงที่เลือก", qb,
         [this] {
             auto *i = queue->currentItem();
             if (i) {
@@ -297,12 +318,23 @@ MainWindow::MainWindow(bool offline) {
             }
         },
         this);
-    button("Remove", qb, [this] { delete queue->takeItem(queue->currentRow()); }, this);
+    button("ลบจากคิว", qb, [this] { delete queue->takeItem(queue->currentRow()); }, this);
     auto *hint = new QLabel("ลากเปลี่ยนคิวได้ • ดับเบิลคลิกเพื่อเล่น\nNCN / KAR "
                             "files\nเพิ่ม SoundFont ก่อนเล่นเสียง MIDI");
     hint->setObjectName("muted");
     hint->setWordWrap(true);
     right->addWidget(hint);
+    connect(search, &QLineEdit::returnPressed, this, [this] {
+        auto *item = songs->currentItem();
+        if (!item && songs->count())
+            item = songs->item(0);
+        if (!item)
+            return;
+        auto *queued = new QListWidgetItem(item->text());
+        queued->setData(Qt::UserRole, item->data(Qt::UserRole));
+        queue->addItem(queued);
+        songSearch->selectAll();
+    });
     auto *mix = new QWidget;
     pages->addWidget(mix);
     mixerPage(mix);
@@ -350,7 +382,7 @@ MainWindow::MainWindow(bool offline) {
     auto *tl = new QVBoxLayout(transport);
     auto *line = new QHBoxLayout;
     tl->addLayout(line);
-    now = new QLabel("Ready for your first song");
+    now = new QLabel("พร้อมร้องเพลง • เลือก SoundFont และเพิ่มฐานข้อมูลเพลง");
     now->setObjectName("heading");
     line->addWidget(now, 1);
     clock = new QLabel("00:00 / 00:00");
@@ -409,6 +441,45 @@ MainWindow::MainWindow(bool offline) {
         qWarning("Song library: %s", e.what());
     }
     rebuildChain();
+    auto *fileMenu = menuBar()->addMenu("ไฟล์");
+    fileMenu->addAction("เปิดโปรเจกต์…", this, [this] { openProject(); });
+    fileMenu->addAction("บันทึกโปรเจกต์…", this, [this] { saveProject(); });
+    fileMenu->addSeparator();
+    fileMenu->addAction("ออกจากโปรแกรม", this, [this] { close(); });
+    auto *songMenu = menuBar()->addMenu("เพลง");
+    songMenu->addAction("ที่เก็บเพลง / ปรับปรุงฐานข้อมูล…", this, [this] { manageNcn(); });
+    auto *viewMenu = menuBar()->addMenu("มุมมอง");
+    auto *find = viewMenu->addAction("ค้นหาเพลง / คิวเพลง", this, [this] {
+        pages->setCurrentIndex(0);
+        browser->setVisible(!browser->isVisible());
+        if (browser->isVisible())
+            songSearch->setFocus();
+    });
+    find->setObjectName("toggleSongBrowser");
+    find->setShortcut(QKeySequence(Qt::Key_F3));
+    viewMenu->addAction("มิกเซอร์ / FX", this, [this] { pages->setCurrentIndex(1); })
+        ->setShortcut(QKeySequence(Qt::Key_F4));
+    viewMenu
+        ->addAction("เต็มจอ / หน้าต่าง", this,
+                    [this] {
+                        if (isFullScreen())
+                            showNormal();
+                        else
+                            showFullScreen();
+                    })
+        ->setShortcut(QKeySequence(Qt::Key_F11));
+    viewMenu->addAction("จอร้องที่สอง", this, [this] { showStage(); });
+    auto *settingsMenu = menuBar()->addMenu("ตั้งค่า");
+    settingsMenu->addAction("เนื้อเพลง / สี / ประสิทธิภาพ…", this, [this] { lyricsSettings(); });
+    settingsMenu->addAction("MIDI / loopMIDI…", this, [this] { midiSettings(); });
+    auto *helpMenu = menuBar()->addMenu("ช่วยเหลือ");
+    helpMenu->addAction("ปุ่มลัด", this, [this] {
+        QMessageBox::information(
+            this, "ปุ่มลัด BT Karaoke",
+            "F3 ค้นหา / ซ่อนแผงเพลง\nEnter ในช่องค้นหา: เพิ่มเพลงเข้าคิว\n"
+            "F4 มิกเซอร์ / FX\nF11 เต็มจอ\nEscape ออกจากเต็มจอ\n"
+            "Insert / Delete: KEY +1 / -1\nPage Up / Page Down: TEMPO +1% / -1%");
+    });
     auto *timer = new QTimer(this);
     refreshTimer = timer;
     connect(timer, &QTimer::timeout, this, [this] { refresh(); });
@@ -482,8 +553,45 @@ bool MainWindow::startupSettled() const {
     return audioAttempted && !audioProbe && engine.audioState != Engine::AudioState::Starting;
 }
 bool MainWindow::smokeReady() const {
-    return chain && meters.size() == size_t(engine.trackCount()) && meters[0] && songStore &&
-           centralWidget() && engine.strips[MasterPart].fx.size() == 1;
+    return mainLyrics && browser && chain && meters.size() == size_t(engine.trackCount()) &&
+           meters[0] && songStore && centralWidget() && engine.strips[MasterPart].fx.size() == 1;
+}
+bool MainWindow::verifyPerformanceUi() {
+    pages->setCurrentIndex(0);
+    if (!mainLyrics->isVisible() || !browser->isVisible())
+        return false;
+    auto *toggle = findChild<QAction *>("toggleSongBrowser");
+    if (!toggle)
+        return false;
+    toggle->trigger();
+    if (browser->isVisible() || !mainLyrics->isVisible())
+        return false;
+    toggle->trigger();
+    if (!browser->isVisible())
+        return false;
+    Song sample;
+    sample.id = "BT-DEMO";
+    sample.title = "เพลงทดสอบหน้าร้อง";
+    sample.duration = 10;
+    sample.lyrics = {{0, "BT Karaoke\n"}, {5, "พร้อมร้องเพลง"}};
+    engine.load(sample);
+    syncLyrics();
+    if (mainLyrics->lineCount() != 2)
+        return false;
+    showStage();
+    bool good = lyrics && lyrics->lineCount() == mainLyrics->lineCount();
+    stage->hide();
+    library.push_back(sample);
+    refreshLibrary();
+    songSearch->setText("BT-DEMO");
+    QMetaObject::invokeMethod(songSearch, "returnPressed", Qt::DirectConnection);
+    good = good && queue->count() == 1 && songs->count() == 1;
+    queue->clear();
+    library.clear();
+    songSearch->clear();
+    engine.load(Song{});
+    syncLyrics();
+    return good;
 }
 bool MainWindow::verifyControlsUi() {
     keyControl->setValue(0);
@@ -1724,6 +1832,8 @@ void MainWindow::openProject() {
         if (obj.contains("lyricsStyle")) {
             lyricStyle.restore(obj["lyricsStyle"].toObject());
             savePreferences();
+            if (mainLyrics)
+                mainLyrics->setAppearance(lyricStyle);
             if (lyrics)
                 lyrics->setAppearance(lyricStyle);
         }
@@ -1812,20 +1922,29 @@ void MainWindow::applyPerformance() {
     engine.setPerformance(lyricStyle.performance);
     if (refreshTimer)
         refreshTimer->start(lyricStyle.mixerInterval());
+    if (mainLyrics)
+        mainLyrics->setAppearance(lyricStyle);
     if (lyrics)
         lyrics->setAppearance(lyricStyle);
 }
 void MainWindow::syncLyrics() {
-    if (!lyrics)
-        return;
     std::lock_guard<std::mutex> lock(engine.mutex);
-    lyrics->setSong(engine.song.lyrics, engine.song.duration);
+    if (mainLyrics)
+        mainLyrics->setSong(engine.song.lyrics, engine.song.duration);
+    if (lyrics)
+        lyrics->setSong(engine.song.lyrics, engine.song.duration);
 }
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if ((event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) &&
         !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
         auto *key = static_cast<QKeyEvent *>(event);
         int step = key->key();
+        if (step == Qt::Key_Escape && isFullScreen()) {
+            if (event->type() == QEvent::KeyPress)
+                showNormal();
+            event->accept();
+            return true;
+        }
         if (key->modifiers() == Qt::NoModifier &&
             (step == Qt::Key_Insert || step == Qt::Key_Delete || step == Qt::Key_PageUp ||
              step == Qt::Key_PageDown)) {

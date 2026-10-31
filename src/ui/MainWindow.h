@@ -42,7 +42,9 @@ class MainWindow final : public QMainWindow {
     QListWidget *songs = nullptr, *queue = nullptr, *chain = nullptr, *pluginList = nullptr;
     QLabel *now = nullptr, *clock = nullptr, *status = nullptr, *cpu = nullptr,
            *chainTitle = nullptr;
-    LyricCanvas *lyrics = nullptr;
+    LyricCanvas *lyrics = nullptr, *mainLyrics = nullptr;
+    QWidget *browser = nullptr;
+    QLineEdit *songSearch = nullptr;
     QTimer *refreshTimer = nullptr;
     QSpinBox *keyControl = nullptr, *tempoControl = nullptr;
     QSlider *seek = nullptr;
@@ -94,6 +96,7 @@ class MainWindow final : public QMainWindow {
     bool smokeReady() const;
     bool verifyMixerUi();
     bool verifyControlsUi();
+    bool verifyPerformanceUi();
     bool verifyImportUi();
     bool verifyDatabaseUi();
     void previewDatabase();
